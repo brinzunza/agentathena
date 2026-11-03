@@ -17,6 +17,8 @@ import SetupPage from './components/SetupPage';
 import { UploadCloudIcon } from './components/Icons';
 import { CONTEXT_USAGE, RESEARCH_USAGE, parseContextCommand, parseResearchCommand } from './commands';
 import { canRedoLast, rewindLastExchange } from './chatHistory';
+import { UploadInterrupted, isAbort, uploadFiles } from './uploader';
+import { createUploadApi, sha256Hex, waitForOnline } from './uploadApi';
 
 export const API_BASE = process.env.NODE_ENV === 'production' ? '' : 'http://localhost:8000';
 
@@ -78,10 +80,13 @@ function App() {
   const [showAgent, setShowAgent] = useState(false);
   const [chatConfig, setChatConfig] = useState(null);
   const [contextUsageByChat, setContextUsageByChat] = useState({});
+  const [unfinishedByChat, setUnfinishedByChat] = useState({});
   const [apiKeyStatus, setApiKeyStatus] = useState(null);
   const [view, setView] = useState('chat'); // 'chat' | 'info' | 'setup'
 
   const uploadIntervalsRef = useRef({});
+  // Uploads in progress, by job id: { chatId, files, controller, uploadIds } - the files stay here so an interrupted upload can resume
+  const uploadJobsRef = useRef({});
   const abortControllersRef = useRef({});
   const loadedMessagesRef = useRef(new Set());
 
@@ -198,6 +203,8 @@ function App() {
   // Cleanup upload polling and in-flight chat requests on unmount
   useEffect(() => {
     return () => {
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      Object.values(uploadJobsRef.current).forEach(job => job.controller?.abort());
       Object.values(uploadIntervalsRef.current).forEach(interval => {
         clearInterval(interval);
       });
@@ -329,66 +336,168 @@ function App() {
     }
   };
 
+  // Uploads the server is holding part of (a closed tab, a crash), so they can be continued
+  const refreshUnfinished = async (chatId) => {
+    if (!chatId) return;
+    try {
+      const list = await createUploadApi(API_BASE, chatId).listUnfinished();
+      setUnfinishedByChat(prev => ({ ...prev, [chatId]: list }));
+    } catch (error) {
+      console.error('failed to list unfinished uploads:', error);
+    }
+  };
+
+  useEffect(() => {
+    refreshUnfinished(activeChatId);
+  }, [activeChatId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const postUploadError = (chatId, content) => {
+    updateMessages(chatId, prev => {
+      const next = [...prev, { role: 'error', content }];
+      persistMessages(chatId, next);
+      return next;
+    });
+  };
+
+  // Sends a job's files in chunks, then hands them to the server to process.
+  // Safe to call again on the same job: whatever the server already holds is
+  // not sent twice, which is what "resume" is.
+  const runUpload = async (chatId, jobId) => {
+    const job = uploadJobsRef.current[jobId];
+    if (!job) return;
+    const controller = new AbortController();
+    job.controller = controller;
+
+    const patch = (changes) => updateUploadQueue(chatId, prev => prev.map(upload =>
+      upload.uploadId === jobId ? { ...upload, ...changes } : upload
+    ));
+    const api = createUploadApi(API_BASE, chatId);
+    let lastPercent = 0;
+    patch({ status: 'uploading', message: 'uploading', error: null });
+
+    try {
+      const uploadIds = await uploadFiles(job.files, {
+        api,
+        signal: controller.signal,
+        hashChunk: sha256Hex,
+        waitForOnline,
+        onSession: (id) => job.uploadIds.add(id),
+        onRetry: ({ attempt, retries }) => patch({ message: `connection problem. retrying (${attempt}/${retries})...` }),
+        onProgress: (p) => {
+          lastPercent = p.total ? Math.floor((p.loaded * 100) / p.total) : 0;
+          patch({
+            status: 'uploading',
+            progress: lastPercent,
+            bytesLoaded: p.loaded,
+            bytesTotal: p.total,
+            fileName: p.fileName,
+            fileIndex: p.fileIndex,
+            fileCount: p.fileCount,
+            message: p.resumedFrom > 0 && p.loaded === p.resumedFrom ? `resuming from ${lastPercent}%` : 'uploading',
+          });
+        },
+      });
+
+      // Every byte is stored. Processing (conversion, indexing) is tracked by the server.
+      const { upload_id: batchId } = await api.process(uploadIds);
+      delete uploadJobsRef.current[jobId];
+      updateUploadQueue(chatId, prev => prev.map(upload =>
+        upload.uploadId === jobId
+          ? { ...upload, uploadId: batchId, status: 'converting', progress: 0, message: 'queued for processing',
+              currentFile: null, processedFiles: 0 }
+          : upload
+      ));
+      uploadIntervalsRef.current[batchId] = setInterval(() => pollUploadStatus(chatId, batchId), 500);
+      pollUploadStatus(chatId, batchId);
+      refreshUnfinished(chatId);
+    } catch (error) {
+      if (isAbort(error)) return;
+
+      // Trouble that waiting won't fix and that the stored data can't recover from:
+      // a connection that never came back, or an upload the server lost track of
+      const recoverable = error instanceof UploadInterrupted || [404, 409, undefined].includes(error.status);
+      if (recoverable && uploadJobsRef.current[jobId]) {
+        patch({
+          status: 'interrupted',
+          message: `upload interrupted at ${lastPercent}%`,
+          error: error.message,
+        });
+        return;
+      }
+
+      // The server refused the file (not a PDF, too big...): nothing to resume
+      delete uploadJobsRef.current[jobId];
+      await Promise.all([...job.uploadIds].map(id => api.abort(id).catch(() => {})));
+      updateUploadQueue(chatId, prev => prev.filter(u => u.uploadId !== jobId));
+      postUploadError(chatId, `upload failed: ${error.message}`);
+      refreshUnfinished(chatId);
+    }
+  };
+
   const handleFileUpload = async (files) => {
     const chatId = activeChatId;
     if (!chatId || !files || files.length === 0) return;
 
-    const tempId = `temp-${Date.now()}`;
-    const fileNames = Array.from(files).map(f => f.name).join(', ');
+    const all = Array.from(files);
+    const pdfs = all.filter(file => file.name.toLowerCase().endsWith('.pdf'));
+    const skipped = all.filter(file => !pdfs.includes(file)).map(file => file.name);
+    if (skipped.length > 0) postUploadError(chatId, `only pdf files can be uploaded: ${skipped.join(', ')}`);
 
+    // The same file dropped twice while it's still going up would be two writers on one upload
+    const inFlight = Object.values(uploadJobsRef.current)
+      .filter(job => job.chatId === chatId)
+      .flatMap(job => job.files);
+    const fresh = pdfs.filter(file => !inFlight.some(
+      other => other.name === file.name && other.size === file.size && other.lastModified === file.lastModified
+    ));
+    if (fresh.length === 0) return;
+
+    const jobId = `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    uploadJobsRef.current[jobId] = { chatId, files: fresh, controller: null, uploadIds: new Set() };
     updateUploadQueue(chatId, prev => [...prev, {
-      uploadId: tempId,
+      uploadId: jobId,
       progress: 0,
       status: 'uploading',
-      message: 'Uploading files...',
+      message: 'uploading',
       currentFile: null,
-      totalFiles: files.length,
+      totalFiles: fresh.length,
       processedFiles: 0,
-      fileNames: fileNames
+      fileName: fresh[0].name,
+      fileIndex: 0,
+      fileCount: fresh.length,
+      bytesLoaded: 0,
+      bytesTotal: fresh.reduce((sum, file) => sum + file.size, 0),
+      error: null
     }]);
 
+    await runUpload(chatId, jobId);
+  };
+
+  const resumeUpload = (jobId) => {
+    const job = uploadJobsRef.current[jobId];
+    if (job) runUpload(job.chatId, jobId);
+  };
+
+  // Stops an upload and throws away what the server stored of it
+  const cancelUpload = async (jobId) => {
+    const job = uploadJobsRef.current[jobId];
+    if (!job) return;
+    job.controller?.abort();
+    delete uploadJobsRef.current[jobId];
+    updateUploadQueue(job.chatId, prev => prev.filter(u => u.uploadId !== jobId));
+    const api = createUploadApi(API_BASE, job.chatId);
+    await Promise.all([...job.uploadIds].map(id => api.abort(id).catch(() => {})));
+    refreshUnfinished(job.chatId);
+  };
+
+  const discardUnfinished = async (uploadId) => {
+    const chatId = activeChatId;
     try {
-      const formData = new FormData();
-      Array.from(files).forEach(file => {
-        formData.append('files', file);
-      });
-
-      const response = await axios.post(`${API_BASE}/chats/${chatId}/documents/upload`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        onUploadProgress: (progressEvent) => {
-          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          updateUploadQueue(chatId, prev => prev.map(upload =>
-            upload.uploadId === tempId
-              ? { ...upload, progress: Math.min(percentCompleted, 10), message: 'Uploading files...' }
-              : upload
-          ));
-        }
-      });
-
-      const uploadId = response.data.upload_id;
-
-      updateUploadQueue(chatId, prev => prev.map(upload =>
-        upload.uploadId === tempId ? { ...upload, uploadId: uploadId } : upload
-      ));
-
-      uploadIntervalsRef.current[uploadId] = setInterval(() => {
-        pollUploadStatus(chatId, uploadId);
-      }, 500);
-
-      pollUploadStatus(chatId, uploadId);
-
+      await createUploadApi(API_BASE, chatId).abort(uploadId);
     } catch (error) {
-      updateUploadQueue(chatId, prev => prev.filter(u => u.uploadId !== tempId));
-      const { message: failure } = readApiError(error);
-      updateMessages(chatId, prev => {
-        const next = [...prev, {
-          role: 'error',
-          content: `upload failed: ${failure}`
-        }];
-        persistMessages(chatId, next);
-        return next;
-      });
+      console.error('failed to discard the upload:', error);
     }
+    refreshUnfinished(chatId);
   };
 
   // Runs a /context slash command. These never reach the model or the
@@ -762,6 +871,12 @@ function App() {
     }));
   };
 
+  // Unfinished uploads the user can continue, minus the ones this page is already handling
+  const handledIds = new Set(
+    Object.values(uploadJobsRef.current).filter(job => job.chatId === activeChatId).flatMap(job => [...job.uploadIds])
+  );
+  const unfinished = (unfinishedByChat[activeChatId] || []).filter(item => !handledIds.has(item.upload_id));
+
   const agentEnabled = !!chatConfig?.agent_enabled;
   const canChat = !!activeChatId && (dbStatus.exists || agentEnabled);
 
@@ -793,12 +908,26 @@ function App() {
           <h2>upload documents to begin</h2>
           <p>add one or more pdfs and athena will index them for grounded, cited answers.</p>
           <UploadDropzone onFiles={handleFileUpload} disabled={loading} />
-          <UploadQueue uploadQueue={uploadQueue} />
+          <UploadQueue
+            uploadQueue={uploadQueue}
+            unfinished={unfinished}
+            onResume={resumeUpload}
+            onCancel={cancelUpload}
+            onPickFiles={handleFileUpload}
+            onDiscardUnfinished={discardUnfinished}
+          />
         </div>
       ) : (
         <>
           <UploadDropzone onFiles={handleFileUpload} disabled={loading} compact={canChat} />
-          <UploadQueue uploadQueue={uploadQueue} />
+          <UploadQueue
+            uploadQueue={uploadQueue}
+            unfinished={unfinished}
+            onResume={resumeUpload}
+            onCancel={cancelUpload}
+            onPickFiles={handleFileUpload}
+            onDiscardUnfinished={discardUnfinished}
+          />
           <MessageList
             chatId={activeChatId}
             onDecidePermission={handlePermission}

@@ -14,8 +14,12 @@ const FAQS = [
     a: "Your documents always stay on this computer. When you ask a question, the relevant excerpts (not the whole document) are sent to whichever AI provider is currently active — OpenAI's or Anthropic's servers if you've added a key for one of them, or nowhere at all if you're using local Ollama, since that runs entirely on your machine. If Athena searches the web, the search words it chose go to a public search engine; you can switch web search off in the agent settings.",
   },
   {
+    q: 'what happens if an upload fails halfway?',
+    a: "Files are uploaded in small pieces, and the progress bar shows how much the server has actually received. If the connection drops, Athena retries a few times on its own; if that doesn't work, the upload pauses with a resume button and nothing is sent twice. If you close the tab or restart the backend, the unfinished upload is listed the next time you open the chat: choose the same file again and it continues from where it stopped. Unfinished uploads are cleared after a day.",
+  },
+  {
     q: 'what file types can I upload?',
-    a: 'PDFs only, for now.',
+    a: 'PDFs only, for now, up to 200 MB each.',
   },
   {
     q: "why did it say it couldn't find an answer?",

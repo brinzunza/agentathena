@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -21,6 +21,7 @@ import chat_manager
 import context_manager
 import agent_tools
 import research
+import uploads
 from agent import run_agent
 import llm_config
 
@@ -84,6 +85,14 @@ class UploadResponse(BaseModel):
     upload_id: str
     status: str
     message: str
+
+class CreateUploadRequest(BaseModel):
+    filename: str
+    size: int
+    last_modified: int = 0
+
+class ProcessUploadsRequest(BaseModel):
+    upload_ids: List[str] = Field(min_length=1, max_length=uploads.MAX_OPEN_SESSIONS)
 
 class UploadProgress(BaseModel):
     upload_id: str
@@ -645,11 +654,13 @@ async def upload_documents(chat_id: str, background_tasks: BackgroundTasks, file
         for i, file in enumerate(files):
             print(f"Receiving file {i+1}/{len(files)}: {file.filename}")
 
-            if not file.filename.endswith('.pdf'):
-                print(f"ERROR: Invalid file type for {file.filename}")
-                raise HTTPException(status_code=400, detail=f"only pdf files allowed: {file.filename}")
+            try:
+                safe_name = uploads.sanitize_filename(file.filename)
+            except uploads.UploadError as e:
+                print(f"ERROR: Invalid file {file.filename}: {e.message}")
+                raise HTTPException(status_code=e.status, detail=e.message)
 
-            file_path = os.path.join(files_path, file.filename)
+            file_path = os.path.join(files_path, safe_name)
             file_size = 0
             with open(file_path, "wb") as f:
                 content = await file.read()
@@ -681,6 +692,121 @@ async def upload_documents(chat_id: str, background_tasks: BackgroundTasks, file
         print(f"ERROR in upload_documents: {str(e)}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"failed to upload documents: {str(e)}")
+
+# --- Chunked, resumable uploads ---
+#
+# The browser announces a file, sends it in pieces (each at an explicit offset),
+# and asks for the batch to be processed once every file has fully arrived. A
+# broken upload picks up where the server's stored count says it stopped.
+
+def upload_http_error(e: "uploads.UploadError") -> HTTPException:
+    return HTTPException(status_code=e.status, detail=e.detail())
+
+
+async def read_limited_body(request: Request, limit: int) -> bytes:
+    """The request body, refusing to buffer more than `limit` bytes whatever the client claims."""
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > limit:
+        raise uploads.UploadError(413, "that chunk is too big", "chunk_too_big")
+    body = bytearray()
+    async for piece in request.stream():
+        body.extend(piece)
+        if len(body) > limit:
+            raise uploads.UploadError(413, "that chunk is too big", "chunk_too_big")
+    return bytes(body)
+
+
+@app.post("/chats/{chat_id}/uploads")
+def create_upload_session(chat_id: str, request: CreateUploadRequest):
+    """Start uploading a file, or resume an unfinished upload of the same file"""
+    resolve_chat_paths(chat_id)
+    try:
+        return uploads.create_session(chat_id, request.filename, request.size, request.last_modified)
+    except uploads.UploadError as e:
+        raise upload_http_error(e)
+
+
+@app.get("/chats/{chat_id}/uploads")
+def list_upload_sessions(chat_id: str):
+    """Unfinished uploads in a chat, with how much of each the server has"""
+    resolve_chat_paths(chat_id)
+    uploads.cleanup_stale(chat_id)
+    return {"uploads": [uploads.get_session(chat_id, meta["id"]) for meta in uploads.list_sessions(chat_id)]}
+
+
+@app.post("/chats/{chat_id}/uploads/process")
+def process_uploads(chat_id: str, request: ProcessUploadsRequest, background_tasks: BackgroundTasks):
+    """Move fully uploaded files into the chat and process them in the background"""
+    chroma_db_path, files_path = resolve_chat_paths(chat_id)
+    try:
+        stored = uploads.finalize(chat_id, request.upload_ids, files_path)
+    except uploads.UploadError as e:
+        raise upload_http_error(e)
+
+    upload_id = str(uuid.uuid4())
+    upload_progress[upload_id] = {
+        "chat_id": chat_id,
+        "status": "converting",
+        "progress": 10,
+        "message": "queued for processing",
+        "current_file": None,
+        "total_files": len(stored),
+        "processed_files": 0
+    }
+    background_tasks.add_task(process_documents_background, upload_id, [path for path, _ in stored],
+                              chroma_db_path, files_path)
+    return UploadResponse(
+        upload_id=upload_id,
+        status="processing",
+        message=f"received {len(stored)} files, processing in background"
+    )
+
+
+@app.get("/chats/{chat_id}/uploads/{upload_id}")
+def read_upload_session(chat_id: str, upload_id: str):
+    """How much of an upload the server has stored (to resume from)"""
+    resolve_chat_paths(chat_id)
+    try:
+        session = uploads.get_session(chat_id, upload_id)
+    except uploads.UploadError as e:
+        raise upload_http_error(e)
+    if not session:
+        raise HTTPException(status_code=404, detail={"message": "upload not found", "code": "not_found"})
+    return session
+
+
+@app.put("/chats/{chat_id}/uploads/{upload_id}")
+async def put_upload_chunk(chat_id: str, upload_id: str, request: Request, offset: int = Query(ge=0)):
+    """Store the next chunk of an upload; `offset` must equal the bytes already stored"""
+    resolve_chat_paths(chat_id)
+    try:
+        data = await read_limited_body(request, uploads.MAX_CHUNK_BYTES)
+        return uploads.append_chunk(chat_id, upload_id, offset, data, request.headers.get("x-chunk-sha256"))
+    except uploads.UploadError as e:
+        raise upload_http_error(e)
+
+
+@app.delete("/chats/{chat_id}/uploads/{upload_id}")
+def abort_upload_session(chat_id: str, upload_id: str):
+    """Cancel an upload and discard what was stored"""
+    resolve_chat_paths(chat_id)
+    try:
+        uploads.abort(chat_id, upload_id)
+    except uploads.UploadError as e:
+        raise upload_http_error(e)
+    return {"status": "success"}
+
+
+@app.on_event("startup")
+def discard_stale_uploads():
+    """Uploads abandoned for a day are cleared out whenever the server starts"""
+    try:
+        removed = uploads.cleanup_stale()
+        if removed:
+            print(f"Removed {removed} stale upload session(s)")
+    except Exception as e:
+        print(f"WARNING: stale upload cleanup failed: {e}")
+
 
 @app.get("/documents/upload/status/{upload_id}")
 async def get_upload_status(upload_id: str):

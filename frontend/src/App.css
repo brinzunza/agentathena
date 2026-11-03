@@ -1935,3 +1935,37 @@ button, input {
 .context-usage-warning .error-action {
   margin-top: 4px;
 }
+
+/* Chunked uploads: resume / cancel, and uploads left unfinished by a closed tab */
+.upload-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.upload-action {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  background: none;
+  color: var(--ink-1);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+}
+
+.upload-action:hover {
+  border-color: var(--color-ink);
+  background: var(--color-ink);
+  color: var(--color-bg);
+}
+
+.progress-bar-fill.paused {
+  background-color: var(--ink-3);
+}
+
+.upload-unfinished {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}

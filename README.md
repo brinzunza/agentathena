@@ -15,6 +15,7 @@ A 1½-minute walkthrough: upload a PDF, ask about it, and watch the agent use to
 ## What it does
 
 - **Chats with their own documents.** Each chat has its own set of PDFs. A new chat can start empty or copy another chat's documents.
+- **Resumable uploads.** PDFs are sent in chunks and the progress bar counts bytes the server has confirmed. If the connection drops, the upload retries and then offers a resume button; if you close the tab, choosing the same file again continues from where it stopped, even after a backend restart. Files can be up to 200 MB.
 - **Cited answers.** Passages from your documents are highlighted in the reply, and the source chips open the document at the exact passage.
 - **An agent, not a fixed pipeline.** For each message the model decides what it needs and the steps show up in the chat:
   - search, read and list your documents
@@ -138,6 +139,7 @@ app/                  core logic, shared by the API
   pdf_converter.py      PDF to Markdown with image descriptions
   qa_workflow.py        LangGraph workflow (classic pipeline)
   chat_manager.py       per-chat storage: messages, context, config
+  uploads.py            chunked, resumable upload sessions
 backend/main.py       FastAPI server
 frontend/             React app
 tests/                backend tests; tests/live/ for real-model scenarios
@@ -148,7 +150,7 @@ docs/                 demo video
 
 ## Limitations
 
-- PDFs only.
+- PDFs only, up to 200 MB each. Unfinished uploads are discarded after a day.
 - Small local models make more mistakes with tools. Use a larger Ollama model or a cloud model for better results.
 - Documents longer than about 9,000 characters are searched rather than read whole, so answers about the whole document depend more on the model.
 - Token counts are estimated (about four characters per token), not exact.
