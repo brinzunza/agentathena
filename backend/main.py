@@ -394,6 +394,12 @@ async def get_chats():
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"failed to list chats: {str(e)}")
 
+@app.get("/chats/search")
+async def search_chats(q: str = ""):
+    """Search chat names and message text (every word of `q` must appear)"""
+    query = q.strip()[:200]
+    return {"query": query, "results": chat_manager.search_chats(query)}
+
 @app.post("/chats")
 async def create_chat(request: CreateChatRequest):
     """Create a new chat, empty or cloned from an existing one's documents"""

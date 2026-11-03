@@ -11,6 +11,7 @@ import DocumentViewerModal from './components/DocumentViewerModal';
 import NewChatModal from './components/NewChatModal';
 import ApiKeyModal from './components/ApiKeyModal';
 import ContextModal from './components/ContextModal';
+import SearchModal from './components/SearchModal';
 import AgentModal from './components/AgentModal';
 import InfoPage from './components/InfoPage';
 import SetupPage from './components/SetupPage';
@@ -78,6 +79,8 @@ function App() {
   const [showNewChatModal, setShowNewChatModal] = useState(false);
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [showContext, setShowContext] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchFocus, setSearchFocus] = useState(null);   // {chatId, index}: a message to scroll to once its chat is showing
   const [showAgent, setShowAgent] = useState(false);
   const [chatConfig, setChatConfig] = useState(null);
   const [contextUsageByChat, setContextUsageByChat] = useState({});
@@ -240,6 +243,24 @@ function App() {
     checkStatuses(chatId);
     loadMessages(chatId);
   };
+
+  // Opening a search hit: the chat, and the matching message when the hit was one
+  const openSearchResult = (result) => {
+    setShowSearch(false);
+    if (result.chat_id !== activeChatId || view !== 'chat') switchChat(result.chat_id);
+    setSearchFocus(result.index === null ? null : { chatId: result.chat_id, index: result.index });
+  };
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setShowSearch(true);
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   const handleCreateChat = async (name, copyFrom) => {
     const response = await axios.post(`${API_BASE}/chats`, { name, copy_from: copyFrom || null });
@@ -946,6 +967,8 @@ function App() {
             onViewSource={setViewingSource}
             onOpenSettings={() => setShowApiKeyModal(true)}
             animateFrom={baselineRef.current[activeChatId] ?? Infinity}
+            focus={searchFocus?.chatId === activeChatId ? searchFocus : null}
+            onFocusDone={() => setSearchFocus(null)}
             canRedo={!loading && canRedoLast(messages)}
             onRegenerate={() => redoLastExchange('regenerate')}
             onEdit={() => redoLastExchange('edit')}
@@ -983,6 +1006,7 @@ function App() {
           onResetDatabase={resetDatabase}
           onOpenLibrary={() => setShowLibrary(true)}
           onOpenContext={() => setShowContext(true)}
+          onOpenSearch={() => setShowSearch(true)}
           contextUsage={contextUsageByChat[activeChatId]}
           onOpenAgent={() => setShowAgent(true)}
           onOpenApiKey={() => setShowApiKeyModal(true)}
@@ -1024,6 +1048,10 @@ function App() {
             onChanged={setChatConfig}
             onClose={() => setShowAgent(false)}
           />
+        )}
+
+        {showSearch && (
+          <SearchModal onClose={() => setShowSearch(false)} onOpen={openSearchResult} />
         )}
 
         {showContext && activeChatId && (

@@ -129,6 +129,71 @@ def list_chats() -> List[dict]:
     return chats
 
 
+SEARCH_SNIPPET_CHARS = 140
+
+
+def _snippet(text: str, terms: List[str]) -> str:
+    """A one-line excerpt of `text` around the first place a search term appears."""
+    flat = " ".join(text.split())
+    lowered = flat.lower()
+    at = min((lowered.find(term) for term in terms if term in lowered), default=0)
+    start = max(0, at - SEARCH_SNIPPET_CHARS // 3)
+    end = min(len(flat), start + SEARCH_SNIPPET_CHARS)
+    return ("…" if start > 0 else "") + flat[start:end].strip() + ("…" if end < len(flat) else "")
+
+
+def search_chats(query: str, limit: int = 50, per_chat: int = 5) -> List[dict]:
+    """
+    Find chats by name and messages by text.
+
+    Every word of the query must appear (in any order, ignoring case). Chats
+    are searched newest first and so are the messages inside each one, so what
+    comes back first is what was said most recently.
+
+    Returns:
+        [{chat_id, chat_name, index, role, snippet}] where `index` is the
+        message's position in the chat, or None when the chat's name matched.
+    """
+    terms = query.lower().split()
+    if not terms or not os.path.exists(CHATS_ROOT):
+        return []
+
+    chats = []
+    for entry in os.listdir(CHATS_ROOT):
+        try:
+            with open(_meta_path(entry), "r", encoding="utf-8") as f:
+                chats.append(json.load(f))
+        except (OSError, ValueError):
+            continue
+    chats.sort(key=lambda chat: chat["created_at"], reverse=True)
+
+    results = []
+    for chat in chats:
+        found = 0
+        if all(term in chat["name"].lower() for term in terms):
+            results.append({"chat_id": chat["id"], "chat_name": chat["name"], "index": None,
+                            "role": "chat", "snippet": chat["name"]})
+        try:
+            messages = get_messages(chat["id"])
+        except (ValueError, OSError):
+            continue
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
+            content = message.get("content")
+            if message.get("role") not in ("user", "assistant") or not isinstance(content, str):
+                continue
+            lowered = content.lower()
+            if all(term in lowered for term in terms):
+                results.append({"chat_id": chat["id"], "chat_name": chat["name"], "index": index,
+                                "role": message["role"], "snippet": _snippet(content, terms)})
+                found += 1
+                if found >= per_chat:
+                    break
+        if len(results) >= limit:
+            break
+    return results[:limit]
+
+
 def create_chat(name: str, copy_from: Optional[str] = None, in_progress_upload_chat_ids: Optional[set] = None) -> dict:
     """
     Create a new chat, either empty or as a copy of another chat's documents.

@@ -11,7 +11,7 @@ const playedIn = (chatId) => (played[chatId] = played[chatId] || new Set());
 
 function MessageList({
   chatId, onDecidePermission, messages, expandedSources, onToggleSources, onViewSource, onOpenSettings,
-  canRedo, onRegenerate, onEdit, animateFrom = Infinity
+  canRedo, onRegenerate, onEdit, animateFrom = Infinity, focus = null, onFocusDone
 }) {
   const scroller = useRef(null);
   const content = useRef(null);
@@ -59,6 +59,23 @@ function MessageList({
     const seen = playedIn(chatId);
     [...seen].forEach((index) => { if (index >= messages.length) seen.delete(index); });
   }, [chatId, messages.length]);
+
+  // A search hit: scroll to that message and flash it. It may not be there yet
+  // (its chat is still loading), so this runs again when the messages arrive.
+  useEffect(() => {
+    if (!focus) return;
+    if (messages.length > 0 && focus.index >= messages.length) {
+      onFocusDone?.();        // the chat has changed since the search
+      return;
+    }
+    const target = content.current?.children[focus.index];
+    if (!target) return;
+    following.current = false;
+    target.scrollIntoView?.({ block: 'center' });
+    target.classList.add('message-found');
+    setTimeout(() => target.classList.remove('message-found'), 2200);
+    onFocusDone?.();
+  }, [focus, messages.length, onFocusDone]);
 
   const lastUserIndex = messages.reduce((found, message, i) => (message.role === 'user' ? i : found), -1);
 

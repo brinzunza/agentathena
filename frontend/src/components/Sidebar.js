@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import PixelOverlay from './PixelOverlay';
 
 function Sidebar({
@@ -11,6 +11,7 @@ function Sidebar({
   onResetDatabase,
   onOpenLibrary,
   onOpenContext,
+  onOpenSearch,
   contextUsage,
   onOpenAgent,
   onOpenApiKey,
@@ -22,16 +23,27 @@ function Sidebar({
   dbStatus,
   chatsLoaded
 }) {
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  // Which destructive button is waiting for a second click: 'clear' | 'reset' | 'delete'
+  const [confirming, setConfirming] = useState(null);
+
+  useEffect(() => setConfirming(null), [activeChatId]);
 
   // Chats present when the list first loaded don't animate; one that appears later does
   const knownChats = useRef(null);
   if (knownChats.current === null && chatsLoaded) knownChats.current = new Set(chats.map((chat) => chat.id));
 
-  const handleConfirmDelete = () => {
-    setConfirmingDelete(false);
-    onDeleteChat(activeChatId);
-  };
+  // A button that asks "are you sure?" with yes / no in its place before it does anything
+  const confirmable = (key, label, question, action) => (confirming === key ? (
+    <span className="chat-list-confirm session-delete-confirm">
+      {question}
+      <button className="confirm-yes" onClick={() => { setConfirming(null); action(); }}>yes</button>
+      <button className="confirm-cancel" onClick={() => setConfirming(null)}>no</button>
+    </span>
+  ) : (
+    <button onClick={() => setConfirming(key)} className="nav-item" disabled={loading}>
+      {label}
+    </button>
+  ));
 
   return (
     <div className="sidebar">
@@ -66,6 +78,9 @@ function Sidebar({
         <button onClick={onNewChat} className="nav-item">
           new chat
         </button>
+        <button onClick={onOpenSearch} className="nav-item" title="search chats (ctrl/cmd + K)">
+          search chats
+        </button>
       </div>
 
       {activeChatId && (
@@ -95,23 +110,9 @@ function Sidebar({
               )}
               context
             </button>
-            <button onClick={onClearChat} className="nav-item" disabled={loading}>
-              clear chat
-            </button>
-            <button onClick={onResetDatabase} className="nav-item" disabled={loading}>
-              reset database
-            </button>
-            {confirmingDelete ? (
-              <span className="chat-list-confirm session-delete-confirm">
-                delete this chat?
-                <button className="confirm-yes" onClick={handleConfirmDelete}>yes</button>
-                <button className="confirm-cancel" onClick={() => setConfirmingDelete(false)}>no</button>
-              </span>
-            ) : (
-              <button onClick={() => setConfirmingDelete(true)} className="nav-item" disabled={loading}>
-                delete chat
-              </button>
-            )}
+            {confirmable('clear', 'clear chat', 'clear this chat?', onClearChat)}
+            {confirmable('reset', 'reset database', 'reset database?', onResetDatabase)}
+            {confirmable('delete', 'delete chat', 'delete this chat?', () => onDeleteChat(activeChatId))}
           </div>
 
           <div className="sidebar-status">

@@ -2474,3 +2474,80 @@ select:focus-visible,
     animation: none;
   }
 }
+
+
+/* --- Search chats --- */
+.search-modal {
+  max-width: 560px;
+}
+
+.search-results {
+  gap: 2px;
+  min-height: 120px;
+}
+
+.search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 9px 10px;
+  border: none;
+  border-left: 2px solid transparent;
+  background: none;
+  text-align: left;
+  font: inherit;
+  color: var(--ink-1);
+  cursor: pointer;
+}
+
+.search-result.active {
+  background: var(--blue-wash);
+  border-left-color: var(--orange);
+}
+
+.search-result-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.search-result-chat {
+  color: var(--blue-strong);
+}
+
+.search-result-role {
+  color: var(--ink-3);
+}
+
+.search-result-snippet {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.search-result-snippet mark {
+  background: var(--orange-wash);
+  color: var(--ink-1);
+  padding: 0 1px;
+}
+
+/* The message a search result led to */
+.message-found {
+  animation: message-found 2.2s steps(8) 1;
+}
+
+@keyframes message-found {
+  0%, 60% { background: var(--orange-wash); box-shadow: 0 0 0 6px var(--orange-wash); }
+  100% { background: transparent; box-shadow: 0 0 0 6px transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message-found {
+    animation: none;
+    background: var(--orange-wash);
+  }
+}
