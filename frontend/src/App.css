@@ -1,38 +1,92 @@
-/* Design tokens — pure black/white, no accent hue. Hierarchy comes from
-   opacity and weight, not color, following brunoinzunza.com. */
+/* Design tokens.
+
+   Palette: "sand & sea" by day, "deep sea" by night. The colour logic:
+   - Cool family (analogous): blue (hue ~203deg) and green (~145deg) for actions,
+     progress and "healthy" states.
+   - Warm accent (complementary): orange (~27deg), almost exactly opposite the
+     blue, kept to ~10% of the surface for emphasis - the streaming cursor,
+     highlights, anything that needs a look.
+   - Neutrals: beige and brown are desaturated oranges, so they sit comfortably
+     next to the blue instead of competing with it, and make up the calm ~60%.
+   Text colours are solid (not translucent) so their contrast is predictable;
+   theme.test.js checks every text pairing against WCAG AA in both themes. */
 :root {
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 
-  --color-bg: #ffffff;
-  --color-ink: #000000;
-  --color-accent: var(--color-ink);
+  color-scheme: light;
 
-  --line: rgba(0, 0, 0, 0.12);
-  --wash: rgba(0, 0, 0, 0.05);
-  --ink-1: rgba(0, 0, 0, 0.92);
-  --ink-2: rgba(0, 0, 0, 0.45);
-  --ink-3: rgba(0, 0, 0, 0.25);
-  --accent-wash: rgba(0, 0, 0, 0.06);
+  /* Ground */
+  --color-bg: #ECE2CE;      /* the sand ground the content card sits on */
+  --surface: #F9F4E8;       /* the lighter cream card, modals, code blocks */
+  --color-ink: #22303C;
+  --ink-1: #22303C;
+  --ink-2: #5E5144;
+  --ink-3: #6D5A49;
+  --line: rgba(114, 95, 78, 0.24);
+  --wash: rgba(138, 106, 76, 0.09);
+  --grid: rgba(39, 100, 136, 0.13);
+  --scrim: rgba(24, 36, 46, 0.42);
+
+  /* Accents */
+  --blue: #276488;
+  --blue-strong: #1C4F70;
+  --blue-wash: rgba(39, 100, 136, 0.11);
+  --orange: #E08838;
+  --orange-text: #9A4912;
+  --orange-wash: rgba(224, 136, 56, 0.22);
+  --green: #4C8564;
+  --green-text: #376A4D;
+  --green-wash: rgba(76, 133, 100, 0.14);
+  --red: #A63D2A;
+  --red-wash: rgba(166, 61, 42, 0.09);
+  --brown: #8A6A4C;
+
+  /* Text that sits on a solid accent fill */
+  --on-blue: #F9F4E8;
+  --on-orange: #22303C;
+  --on-red: #F9F4E8;
+
+  --color-accent: var(--blue);
+  --accent-wash: var(--blue-wash);
 
   --radius-sm: 3px;
   --radius-md: 5px;
   --radius-lg: 7px;
-  --transition: 120ms ease;
+  --transition: 140ms ease;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --color-bg: #000000;
-    --color-ink: #ffffff;
-    --color-accent: var(--color-ink);
+    color-scheme: dark;
 
-    --line: rgba(255, 255, 255, 0.14);
-    --wash: rgba(255, 255, 255, 0.06);
-    --ink-1: rgba(255, 255, 255, 0.92);
-    --ink-2: rgba(255, 255, 255, 0.48);
-    --ink-3: rgba(255, 255, 255, 0.28);
-    --accent-wash: rgba(255, 255, 255, 0.08);
+    --color-bg: #0A141B;
+    --surface: #13232C;
+    --color-ink: #EFE6D6;
+    --ink-1: #EFE6D6;
+    --ink-2: #BDAE97;
+    --ink-3: #968A78;
+    --line: rgba(214, 196, 168, 0.17);
+    --wash: rgba(214, 196, 168, 0.07);
+    --grid: rgba(109, 180, 214, 0.09);
+    --scrim: rgba(4, 10, 14, 0.62);
+
+    --blue: #6DB4D6;
+    --blue-strong: #8CC8E4;
+    --blue-wash: rgba(109, 180, 214, 0.13);
+    --orange: #EBA05E;
+    --orange-text: #F0B27C;
+    --orange-wash: rgba(235, 160, 94, 0.2);
+    --green: #86C79B;
+    --green-text: #9CD5AE;
+    --green-wash: rgba(134, 199, 155, 0.15);
+    --red: #EC917F;
+    --red-wash: rgba(236, 145, 127, 0.11);
+    --brown: #B79B7A;
+
+    --on-blue: #0A141B;
+    --on-orange: #0A141B;
+    --on-red: #0A141B;
   }
 }
 
@@ -1253,6 +1307,8 @@ button, input {
     flex: 1;
     min-height: 0;
     max-width: 100%;
+    padding: 18px 16px 14px;
+    box-shadow: 5px 5px 0 var(--blue-wash);
   }
 }
 
@@ -1968,4 +2024,476 @@ button, input {
   flex-direction: column;
   gap: 8px;
   margin-top: 4px;
+}
+
+/* ==========================================================================
+   Colour roles and pixel details.
+
+   blue    actions, links, progress, focus   (the cool 30%)
+   green   things that are healthy or done
+   orange  emphasis and attention: the cursor, highlights, prompts to look
+   red     errors and destructive confirmations
+   beige / brown   the calm ground and secondary text
+   Rules below override the neutral defaults above them.
+   ========================================================================== */
+
+::selection {
+  background: var(--orange-wash);
+  color: var(--ink-1);
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+.chat-list-item:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+/* Ground: beige with a faint blue dot grid, like graph paper */
+.app {
+  background-color: var(--color-bg);
+  background-image: radial-gradient(circle at 1px 1px, var(--grid) 1px, transparent 1.5px);
+  background-size: 24px 24px;
+}
+
+/* The content sits on a lighter cream card over the sand ground, with a hard
+   pixel-style shadow in blue */
+.main {
+  position: relative;
+  padding: 28px 40px 22px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 8px 8px 0 var(--blue-wash);
+}
+
+.field-input,
+.chat-input-wrap,
+.upload-progress {
+  background: transparent;
+}
+
+.modal-backdrop {
+  background: var(--scrim);
+}
+
+.modal-card {
+  background: var(--surface);
+  box-shadow: 8px 8px 0 var(--blue-wash);
+}
+
+/* Stepped, pixel-art corners */
+.primary-action,
+.send-button,
+.confirm-yes,
+.message.user .message-content {
+  clip-path: polygon(
+    0 3px, 3px 3px, 3px 0,
+    calc(100% - 3px) 0, calc(100% - 3px) 3px, 100% 3px,
+    100% calc(100% - 3px), calc(100% - 3px) calc(100% - 3px), calc(100% - 3px) 100%,
+    3px 100%, 3px calc(100% - 3px), 0 calc(100% - 3px)
+  );
+}
+
+/* --- Sidebar --- */
+.sidebar-label::before {
+  content: '';
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 7px;
+  vertical-align: middle;
+  background: var(--brown);
+}
+
+.sidebar-brand {
+  align-items: center;
+  gap: 10px;
+}
+
+.sidebar-brand-mark {
+  display: block;
+  width: 15px;
+  height: 15px;
+  fill: var(--blue);
+}
+
+.sidebar-brand-mark .brand-pixel-accent {
+  fill: var(--orange);
+}
+
+.chat-list-item,
+.nav-item {
+  position: relative;
+}
+
+.chat-list-item:hover,
+.nav-item:hover:not(:disabled) {
+  color: var(--blue);
+}
+
+/* The current chat / page gets a small orange pixel */
+.chat-list-item.active::after,
+.nav-item.active::after {
+  content: '';
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  margin-left: 8px;
+  background: var(--orange);
+}
+
+.nav-item-badge {
+  border-radius: 2px;
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.nav-item-badge-warn {
+  background: var(--orange);
+  border-color: var(--orange);
+  color: var(--on-orange);
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 0;
+}
+
+.status-dot.active {
+  background: var(--green);
+  box-shadow: 0 0 0 2px var(--green-wash);
+}
+
+/* --- Title: blue, with a terminal cursor --- */
+.title {
+  color: var(--blue-strong);
+}
+
+.title::after {
+  content: '_';
+  margin-left: 3px;
+  color: var(--orange);
+  animation: pixel-blink 1.2s steps(1) infinite;
+}
+
+/* --- Buttons and inputs --- */
+.primary-action,
+.send-button {
+  background: var(--blue);
+  color: var(--on-blue);
+  transition: background var(--transition), opacity var(--transition);
+}
+
+.primary-action:hover:not(:disabled),
+.send-button:hover:not(:disabled) {
+  background: var(--blue-strong);
+  opacity: 1;
+}
+
+.stop-button,
+.stop-button:hover:not(:disabled) {
+  background: var(--orange);
+  color: var(--on-orange);
+}
+
+.chat-input-wrap:focus-within,
+.field-input:focus,
+.context-number:focus {
+  border-color: var(--blue);
+}
+
+.dropzone.drag-active {
+  border-color: var(--blue);
+  background: var(--blue-wash);
+}
+
+.source-chip {
+  background: var(--surface);
+}
+
+.source-chip:hover,
+.sources-toggle:hover,
+.message-action:hover {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.error-action,
+.provider-use,
+.provider-remove,
+.upload-action {
+  border-color: var(--blue);
+  color: var(--blue-strong);
+}
+
+.error-action:hover:not(:disabled),
+.provider-use:hover:not(:disabled),
+.provider-remove:hover:not(:disabled),
+.upload-action:hover {
+  border-color: var(--blue);
+  background: var(--blue);
+  color: var(--on-blue);
+}
+
+.confirm-yes {
+  background: var(--red);
+  border-color: var(--red);
+  color: var(--on-red);
+}
+
+/* --- Progress: segmented blue, with orange as the "alive" dot --- */
+.progress-bar-container {
+  height: 4px;
+  background: var(--line);
+}
+
+.progress-bar-fill {
+  background-color: var(--blue);
+  background-image: repeating-linear-gradient(90deg, transparent 0 6px, rgba(243, 236, 223, 0.32) 6px 8px);
+}
+
+.progress-bar-fill.active {
+  background-image:
+    repeating-linear-gradient(90deg, transparent 0 6px, rgba(243, 236, 223, 0.32) 6px 8px),
+    linear-gradient(100deg, var(--blue) 40%, var(--green) 50%, var(--blue) 60%);
+  background-size: auto, 200% 100%;
+}
+
+.progress-bar-fill.paused {
+  background-color: var(--brown);
+}
+
+.progress-live-dot,
+.step-live-dot {
+  border-radius: 0;
+  background: var(--orange);
+}
+
+.context-meter-fill {
+  background: var(--blue);
+}
+
+.context-meter-fill.full {
+  background: var(--orange);
+}
+
+.provider-active {
+  color: var(--green-text);
+}
+
+/* --- Messages --- */
+.message-content {
+  position: relative;
+}
+
+/* Speakers are colour-coded: you in blue, Athena with a green rule */
+.message.assistant .message-content {
+  padding-left: 14px;
+  border-left: 2px solid var(--green);
+}
+
+.message.user .message-content {
+  padding: 9px 16px;
+  border-bottom: none;
+  background: var(--blue-wash);
+  color: var(--ink-1);
+}
+
+.message-content strong {
+  background: var(--orange-wash);
+  padding: 0 3px;
+}
+
+/* The streaming cursor: a pulsing orange block */
+.streaming::after {
+  content: '';
+  display: inline-block;
+  width: 0.55em;
+  height: 1.05em;
+  margin-left: 3px;
+  vertical-align: text-bottom;
+  background: var(--orange);
+  animation: pixel-blink 1s steps(1) infinite;
+}
+
+@keyframes pixel-blink {
+  50% { opacity: 0; }
+}
+
+/* "working": three hopping pixels */
+.loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pixel-loader {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.pixel-loader i {
+  width: 6px;
+  height: 6px;
+  background: var(--blue);
+  animation: pixel-hop 1s steps(2) infinite;
+}
+
+.pixel-loader i:nth-child(2) {
+  background: var(--orange);
+  animation-delay: 0.15s;
+}
+
+.pixel-loader i:nth-child(3) {
+  background: var(--green);
+  animation-delay: 0.3s;
+}
+
+@keyframes pixel-hop {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+.message.error .message-content {
+  border-color: var(--red);
+  background: var(--red-wash);
+}
+
+.error-label {
+  color: var(--red);
+}
+
+.message.error .error-action {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.message.error .error-action:hover {
+  background: var(--red);
+  color: var(--on-red);
+}
+
+/* --- Agent: tool steps trail down a dotted blue line --- */
+.step-list {
+  border-left: 2px dotted var(--blue);
+}
+
+.step-tool {
+  color: var(--blue-strong);
+}
+
+.step-ok .step-status {
+  color: var(--green-text);
+}
+
+.step-error .step-status,
+.step-denied .step-status {
+  color: var(--red);
+}
+
+.permission-prompt {
+  border-color: var(--orange);
+  background: var(--orange-wash);
+}
+
+.permission-title {
+  color: var(--ink-1);
+}
+
+.agent-warning {
+  border-color: var(--red);
+  background: var(--red-wash);
+}
+
+.research-card {
+  background: var(--surface);
+  border-top: 2px solid var(--blue);
+}
+
+.research-label {
+  color: var(--blue);
+}
+
+.research-plan-done {
+  color: var(--green-text);
+}
+
+.research-error {
+  color: var(--red);
+}
+
+/* --- Markdown --- */
+.markdown a {
+  color: var(--blue);
+  text-decoration-color: var(--orange);
+}
+
+.markdown code {
+  color: var(--orange-text);
+}
+
+.markdown pre {
+  background: var(--surface);
+  border-left: 3px solid var(--blue);
+}
+
+.markdown pre code {
+  color: var(--ink-1);
+}
+
+.markdown blockquote {
+  border-left-color: var(--orange);
+}
+
+.markdown th {
+  background: var(--blue-wash);
+}
+
+.step-code {
+  background: var(--surface);
+}
+
+/* --- Pages --- */
+.docs-step-num {
+  background: var(--blue);
+  color: var(--on-blue);
+}
+
+.docs-card-title,
+.docs-section h2 {
+  color: var(--blue-strong);
+}
+
+.docs-card,
+.docs-step-icon {
+  background: var(--surface);
+}
+
+/* --- Pixel transitions --- */
+.pixel-host {
+  position: relative;
+}
+
+.pixel-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 4;
+  image-rendering: pixelated;
+}
+
+.main > .pixel-canvas {
+  z-index: 6;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .title::after,
+  .streaming::after,
+  .pixel-loader i {
+    animation: none;
+  }
 }

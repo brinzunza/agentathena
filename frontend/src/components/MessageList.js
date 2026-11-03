@@ -4,9 +4,14 @@ import Message from './Message';
 // How close to the bottom still counts as "following along"
 const STICK_THRESHOLD_PX = 80;
 
+// Which messages have already played their pixel reveal, per chat, so
+// switching away and back doesn't replay them.
+const played = {};
+const playedIn = (chatId) => (played[chatId] = played[chatId] || new Set());
+
 function MessageList({
   chatId, onDecidePermission, messages, expandedSources, onToggleSources, onViewSource, onOpenSettings,
-  canRedo, onRegenerate, onEdit
+  canRedo, onRegenerate, onEdit, animateFrom = Infinity
 }) {
   const scroller = useRef(null);
   const content = useRef(null);
@@ -49,6 +54,12 @@ function MessageList({
     scrollToBottom();
   }, [sentCount]);
 
+  // Redoing a message removes some and adds new ones at the same positions; those are new
+  useEffect(() => {
+    const seen = playedIn(chatId);
+    [...seen].forEach((index) => { if (index >= messages.length) seen.delete(index); });
+  }, [chatId, messages.length]);
+
   const lastUserIndex = messages.reduce((found, message, i) => (message.role === 'user' ? i : found), -1);
 
   return (
@@ -68,6 +79,9 @@ function MessageList({
             canRedo={canRedo}
             onRegenerate={onRegenerate}
             onEdit={onEdit}
+            pixel={index >= animateFrom && !playedIn(chatId).has(index)
+              ? { onDone: () => playedIn(chatId).add(index) }
+              : null}
           />
         ))}
       </div>

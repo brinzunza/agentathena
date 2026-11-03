@@ -19,6 +19,7 @@ import { CONTEXT_USAGE, RESEARCH_USAGE, parseContextCommand, parseResearchComman
 import { canRedoLast, rewindLastExchange } from './chatHistory';
 import { UploadInterrupted, isAbort, uploadFiles } from './uploader';
 import { createUploadApi, sha256Hex, waitForOnline } from './uploadApi';
+import PixelTransition from './components/PixelTransition';
 
 export const API_BASE = process.env.NODE_ENV === 'production' ? '' : 'http://localhost:8000';
 
@@ -81,6 +82,10 @@ function App() {
   const [chatConfig, setChatConfig] = useState(null);
   const [contextUsageByChat, setContextUsageByChat] = useState({});
   const [unfinishedByChat, setUnfinishedByChat] = useState({});
+  // How the main view transitions the next time the chat changes: a plain dissolve to switch, a bigger sweep to create
+  const [transitionPreset, setTransitionPreset] = useState('switch');
+  // How many messages a chat had when it loaded; only later ones play the pixel reveal
+  const baselineRef = useRef({});
   const [apiKeyStatus, setApiKeyStatus] = useState(null);
   const [view, setView] = useState('chat'); // 'chat' | 'info' | 'setup'
 
@@ -147,7 +152,9 @@ function App() {
     loadedMessagesRef.current.add(chatId);
     try {
       const response = await axios.get(`${API_BASE}/chats/${chatId}/messages`);
-      setMessagesByChat(prev => ({ ...prev, [chatId]: response.data.messages || [] }));
+      const history = response.data.messages || [];
+      baselineRef.current[chatId] = history.length;
+      setMessagesByChat(prev => ({ ...prev, [chatId]: history }));
     } catch (error) {
       console.error('failed to load messages:', error);
       loadedMessagesRef.current.delete(chatId);
@@ -229,6 +236,7 @@ function App() {
     setShowContext(false);
     setViewingSource(null);
     setView('chat');
+    setTransitionPreset('switch');
     checkStatuses(chatId);
     loadMessages(chatId);
   };
@@ -238,6 +246,7 @@ function App() {
     const newChat = response.data;
     setChats(prev => [...prev, newChat]);
     switchChat(newChat.id);
+    setTransitionPreset('create');
     setShowNewChatModal(false);
   };
 
@@ -822,6 +831,7 @@ function App() {
     if (!activeChatId) return;
     updateMessages(activeChatId, []);
     persistMessages(activeChatId, []);
+    baselineRef.current[activeChatId] = 0;
     // The model's context is what it remembers of this conversation, so
     // clearing the conversation clears that too.
     axios.delete(`${API_BASE}/chats/${activeChatId}/context`)
@@ -936,6 +946,7 @@ function App() {
             onToggleSources={toggleSources}
             onViewSource={setViewingSource}
             onOpenSettings={() => setShowApiKeyModal(true)}
+            animateFrom={baselineRef.current[activeChatId] ?? Infinity}
             canRedo={!loading && canRedoLast(messages)}
             onRegenerate={() => redoLastExchange('regenerate')}
             onEdit={() => redoLastExchange('edit')}
@@ -950,7 +961,10 @@ function App() {
             agentEnabled={agentEnabled}
           />
           {loading && !messages[messages.length - 1]?.streaming && (
-            <div className="loading">working...</div>
+            <div className="loading">
+              <span className="pixel-loader" aria-hidden="true"><i /><i /><i /></span>
+              working
+            </div>
           )}
         </>
       )}
@@ -979,6 +993,7 @@ function App() {
           onOpenSetup={() => setView('setup')}
           loading={loading}
           dbStatus={dbStatus}
+          chatsLoaded={chatsLoaded}
         />
 
         {showNewChatModal && (
@@ -1031,6 +1046,7 @@ function App() {
         )}
 
         <div className="main">
+          <PixelTransition triggerKey={`${view}:${activeChatId}`} preset={transitionPreset} />
           {view === 'info' ? (
             <InfoPage />
           ) : view === 'setup' ? (

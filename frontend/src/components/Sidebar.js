@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
+import PixelOverlay from './PixelOverlay';
 
 function Sidebar({
   chats,
@@ -18,9 +19,14 @@ function Sidebar({
   onOpenInfo,
   onOpenSetup,
   loading,
-  dbStatus
+  dbStatus,
+  chatsLoaded
 }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  // Chats present when the list first loaded don't animate; one that appears later does
+  const knownChats = useRef(null);
+  if (knownChats.current === null && chatsLoaded) knownChats.current = new Set(chats.map((chat) => chat.id));
 
   const handleConfirmDelete = () => {
     setConfirmingDelete(false);
@@ -29,7 +35,17 @@ function Sidebar({
 
   return (
     <div className="sidebar">
-      <div className="sidebar-brand">athena</div>
+      <div className="sidebar-brand">
+        <svg className="sidebar-brand-mark" viewBox="0 0 5 5" aria-hidden="true" shapeRendering="crispEdges">
+          <rect x="2" y="0" width="1" height="1" className="brand-pixel-accent" />
+          <rect x="1" y="1" width="1" height="1" />
+          <rect x="3" y="1" width="1" height="1" />
+          <rect x="0" y="2" width="1" height="3" />
+          <rect x="4" y="2" width="1" height="3" />
+          <rect x="1" y="3" width="3" height="1" />
+        </svg>
+        athena
+      </div>
 
       <div className="sidebar-section">
         <div className="sidebar-label">chats</div>
@@ -41,6 +57,9 @@ function Sidebar({
               onClick={() => onSwitchChat(chat.id)}
             >
               <span className="chat-list-name">{chat.name}</span>
+              {knownChats.current && !knownChats.current.has(chat.id) && (
+                <PixelOverlay preset="listItem" ground="--color-bg" onDone={() => knownChats.current.add(chat.id)} />
+              )}
             </div>
           ))}
         </div>
