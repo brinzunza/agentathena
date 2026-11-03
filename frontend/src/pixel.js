@@ -94,11 +94,11 @@ export function planFrame({ width, height, block = 8, variant = 'dissolve', prog
 
 // The look of each kind of transition, in one place
 export const PRESETS = {
-  prompt:   { variant: 'wave',     direction: 'rtl', block: 6,  duration: 480, steps: 8,  accentShare: 0.1 },
-  response: { variant: 'dissolve', direction: 'ltr', block: 7,  duration: 640, steps: 9,  accentShare: 0.1 },
-  note:     { variant: 'dissolve', direction: 'ltr', block: 6,  duration: 420, steps: 7,  accentShare: 0.06 },
-  card:     { variant: 'wave',     direction: 'ltr', block: 10, duration: 560, steps: 9,  accentShare: 0.12 },
-  switch:   { variant: 'dissolve', direction: 'ltr', block: 14, duration: 420, steps: 8,  accentShare: 0.06 },
-  create:   { variant: 'sweep',    direction: 'ltr', block: 16, duration: 820, steps: 12, accentShare: 0.24 },
-  listItem: { variant: 'wave',     direction: 'rtl', block: 5,  duration: 600, steps: 9,  accentShare: 0.3 },
+  prompt:   { variant: 'wave',     direction: 'rtl', block: 3,  duration: 480, steps: 8,  accentShare: 0.1 },
+  response: { variant: 'dissolve', direction: 'ltr', block: 4,  duration: 640, steps: 9,  accentShare: 0.1 },
+  note:     { variant: 'dissolve', direction: 'ltr', block: 3,  duration: 420, steps: 7,  accentShare: 0.06 },
+  card:     { variant: 'wave',     direction: 'ltr', block: 5,  duration: 560, steps: 9,  accentShare: 0.12 },
+  switch:   { variant: 'dissolve', direction: 'ltr', block: 7,  duration: 420, steps: 8,  accentShare: 0.06 },
+  create:   { variant: 'sweep',    direction: 'ltr', block: 8,  duration: 820, steps: 12, accentShare: 0.24 },
+  listItem: { variant: 'wave',     direction: 'rtl', block: 3,  duration: 600, steps: 9,  accentShare: 0.3 },
 };

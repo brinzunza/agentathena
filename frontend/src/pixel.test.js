@@ -206,7 +206,7 @@ describe('presets', () => {
   test.each(Object.entries(PRESETS))('%s is a valid look', (name, preset) => {
     expect(VARIANTS).toContain(preset.variant);
     expect(['ltr', 'rtl']).toContain(preset.direction);
-    expect(preset.block).toBeGreaterThanOrEqual(4);
+    expect(preset.block).toBeGreaterThanOrEqual(2);
     expect(preset.duration).toBeGreaterThan(200);
     expect(preset.duration).toBeLessThan(1200);     // transitions stay quick
     expect(preset.steps).toBeGreaterThanOrEqual(6);
