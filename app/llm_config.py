@@ -221,7 +221,8 @@ def get_llm(temperature: float = 0, streaming: bool = True, **kwargs) -> BaseCha
     Get an LLM instance for the active provider (see get_active_provider).
 
     Args:
-        temperature: Model temperature (0-1, default 0)
+        temperature: Model temperature (0-1, default 0). Not sent to Claude,
+            whose current models don't accept it.
         streaming: Whether to enable streaming responses (default True)
         **kwargs: Additional model-specific parameters. num_predict is the
             output-token cap (Ollama's name; Claude's max_tokens); num_ctx is
@@ -265,9 +266,10 @@ def get_llm(temperature: float = 0, streaming: bool = True, **kwargs) -> BaseCha
         # Claude requires an explicit output cap
         anthropic_kwargs["max_tokens"] = kwargs.get("num_predict", 2000)
 
+        # Newer Claude models reject a temperature parameter outright (400
+        # "temperature is deprecated for this model"), so it is never sent
         return ChatAnthropic(
             model=model_name,
-            temperature=temperature,
             streaming=streaming,
             api_key=_key_for("anthropic"),
             **anthropic_kwargs

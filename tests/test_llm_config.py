@@ -127,6 +127,17 @@ def test_get_llm_builds_the_active_providers_model(monkeypatch):
     assert config.get_llm().max_tokens == 2000   # Claude needs a cap, so there's a default
 
 
+def test_claude_is_never_sent_a_temperature(monkeypatch):
+    # current Claude models answer 400 "temperature is deprecated for this model"
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    from langchain_core.messages import HumanMessage
+    for requested in (0, 0.1, 0.7):
+        llm = config.get_llm(temperature=requested)
+        payload = llm._get_request_payload([HumanMessage("hi")])
+        assert "temperature" not in payload
+
+
 def test_model_names_can_be_overridden_from_the_environment(monkeypatch):
     monkeypatch.setenv("OLLAMA_MODEL", "llama3.1:8b")
     assert config.get_model_info()["model"] == "llama3.1:8b"
