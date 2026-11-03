@@ -452,3 +452,57 @@ def test_every_uploaded_document_is_read_when_they_fit_together(homework, monkey
     assert [e["args"]["name"] for e in events if e["type"] == "step"] == ["homework2", "rubric"]
     content = llm.calls[0][-1].content
     assert "[homework2]" in content and "[rubric]" in content and "documents" in content
+
+
+def fake_web_search(self, query):
+    """Search the web."""
+    return "results"
+
+
+OFFER = "The 2026 World Cup was held this summer, so I can search for the official results if you'd like."
+
+
+def test_saying_sure_to_an_offer_carries_it_out_with_tools(chat_id, monkeypatch):
+    llm = ScriptedLLM(call("web_search", {"query": "2026 world cup top scorers"}), text("Mbappe led with 10."))
+    monkeypatch.setattr(agent_tools.ToolBox, "web_search", fake_web_search)
+    events = run(chat_id, monkeypatch, llm, question="sure", history=[("hi", OFFER)])
+    assert "web_search" in llm.bound_names                         # tools were not skipped
+    told = llm.calls[0][-1].content
+    assert told.startswith("sure") and "do what you offered" in told
+    assert answer_of(events) == "Mbappe led with 10."
+    entry = chat_manager.get_context(chat_id)[0]
+    assert entry["question"] == "sure"                              # the user's words are what is remembered
+
+
+def test_sure_without_an_offer_is_just_chat(chat_id, monkeypatch):
+    llm = ScriptedLLM(text("ok"))
+    run(chat_id, monkeypatch, llm, question="sure", history=[("2+2?", "It is 4.")])
+    assert llm.calls[0][-1].content == "sure"
+
+
+@pytest.mark.parametrize("message", ["sure", "Yes please!", "go ahead", "ok", "okay sure", "do it."])
+def test_the_ways_of_accepting_an_offer(message):
+    assert agent.accepts_offer(message, [("hi", OFFER)])
+
+
+@pytest.mark.parametrize("message", ["sure, but only for Messi", "yes the 2022 one", "what is 2+2", "no"])
+def test_longer_or_different_replies_are_not_taken_as_acceptance(message):
+    assert not agent.accepts_offer(message, [("hi", OFFER)])
+
+
+def test_an_answer_remembers_what_it_was_looked_up_with(chat_id, monkeypatch):
+    llm = ScriptedLLM(call("calculator", {"expression": "2+2"}), call("web_search", {"query": "top scorers"}),
+                      text("done"))
+    monkeypatch.setattr(agent_tools.ToolBox, "web_search", fake_web_search)
+    run(chat_id, monkeypatch, llm)
+    entry = chat_manager.get_context(chat_id)[0]
+    assert entry["looked_up"] == ['web search "top scorers"']       # the calculator fetched nothing
+
+
+def test_the_model_is_shown_that_an_earlier_answer_was_researched(chat_id):
+    import context_manager
+    context_manager.record_turn(chat_id, "who scored most?", "Mbappe.", ['web search "top scorers"'])
+    context_manager.record_turn(chat_id, "and 2+2?", "4")
+    first, second = context_manager.build_history(chat_id)
+    assert first[1] == 'Mbappe.\n\n[looked up: web search "top scorers"]'
+    assert second[1] == "4"

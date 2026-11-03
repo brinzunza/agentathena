@@ -10,7 +10,7 @@ recording finished turns, and the compact / keep-only operations.
 
 import uuid
 from datetime import datetime
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import chat_manager
 from llm_prompts import get_context_compactor, get_topic_matcher, parse_topic_match
@@ -105,7 +105,10 @@ def build_history(chat_id: str) -> List[Tuple[str, str]]:
     if summary:
         history.append(("summary of the earlier conversation", summary["text"]))
     for entry in sent:
-        history.append((entry["question"], _truncate(entry["answer"], MAX_HISTORY_ANSWER_CHARS)))
+        answer = _truncate(entry["answer"], MAX_HISTORY_ANSWER_CHARS)
+        if entry.get("looked_up"):
+            answer += "\n\n[looked up: " + "; ".join(entry["looked_up"]) + "]"
+        history.append((entry["question"], answer))
     return history
 
 
@@ -132,8 +135,15 @@ def usage(chat_id: str) -> dict:
     }
 
 
-def record_turn(chat_id: str, question: str, answer: str) -> None:
-    """Append a finished question/answer exchange to the chat's context."""
+def record_turn(chat_id: str, question: str, answer: str, looked_up: Optional[List[str]] = None) -> None:
+    """
+    Append a finished question/answer exchange to the chat's context.
+
+    `looked_up` says how the answer was researched (e.g. 'web search "x"').
+    Only the answer text is kept otherwise, so without it a later turn can't
+    tell a researched answer from a guess - and a model asked "hi" has been
+    seen to retract a correct, searched answer as unchecked.
+    """
     entry = {
         "id": _new_id(),
         "kind": "turn",
@@ -141,6 +151,8 @@ def record_turn(chat_id: str, question: str, answer: str) -> None:
         "answer": answer,
         "created_at": _now(),
     }
+    if looked_up:
+        entry["looked_up"] = list(looked_up)
     chat_manager.update_context(chat_id, lambda entries: entries + [entry])
 
 

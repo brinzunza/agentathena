@@ -62,6 +62,25 @@ def is_small_talk(text: str) -> bool:
     return bool(_SMALL_TALK.match(text)) and len(text.split()) <= 6
 
 
+# A bare "yes" to something Athena offered ("...I can search for the results if you'd like"). On its
+# own it means nothing to a model: asked to answer "sure", one searched its memory for the word.
+_AFFIRMATION = re.compile(
+    r"^\s*(sure( thing)?|yes( please)?|yeah|yep|yup|ok(ay)?( sure)?|go ahead|please do|do it|go for it|"
+    r"sounds good|please)[\s.!,]*$",
+    re.IGNORECASE,
+)
+_OFFER = re.compile(
+    r"\?|\b(if you'?d like|if you would like|if you want|let me know|shall i|should i|want me to|would you like|"
+    r"i can (also )?(search|look|check|find|run|calculate|try))\b",
+    re.IGNORECASE,
+)
+
+
+def accepts_offer(text: str, history: List[Tuple[str, str]]) -> bool:
+    """The message just says yes, and the last reply ended by offering something."""
+    return bool(history) and bool(_AFFIRMATION.match(text)) and bool(_OFFER.search(history[-1][1][-300:]))
+
+
 # The user telling Athena something about themselves ("my name is actually
 # John"). That is for the conversation context to hold, not for a document
 # search; left to itself a small model searches the documents for it anyway.
@@ -326,6 +345,17 @@ def agent_loop(messages: list, toolbox: ToolBox, max_steps: int, include_context
             messages.append(ToolMessage(content=result, tool_call_id=call["id"]))
 
 
+_LOOKUP_LABELS = {"web_search": "web search", "search_documents": "document search",
+                  "fetch_url": "opened", "read_document": "read document"}
+
+
+def lookup_note(tool: str, args: dict) -> str:
+    """How a research step reads in the context ('web search "x"'), or '' for tools that fetch nothing."""
+    label = _LOOKUP_LABELS.get(tool)
+    detail = next((str(args[key]) for key in ("query", "url", "name") if args.get(key)), "")
+    return f'{label} "{detail[:80]}"' if label and detail else ""
+
+
 def run_agent(chat_id: str, question: str, history: List[Tuple[str, str]], config: dict) -> Iterator[dict]:
     """
     Answer one user message with the agent, yielding SSE-ready event dicts:
@@ -337,7 +367,11 @@ def run_agent(chat_id: str, question: str, history: List[Tuple[str, str]], confi
     toolbox = ToolBox(chat_id, config)
     toolbox.context_tools_allowed = context_tools_for(question)
     names = toolbox.document_names()
-    use_tools = not skips_tools(question, bool(history))
+    accepted = accepts_offer(question, history)
+    use_tools = accepted or not skips_tools(question, bool(history))
+    # What the model reads in place of the bare "sure"; the context keeps the user's own words
+    model_question = (f"{question}\n\n(That is my answer to your last message. Go ahead and do what you offered, "
+                      f"using your tools if it needs them.)") if accepted else question
 
     # When the user points at "this project" and what they uploaded is small, read it
     # for them before the model's first turn. Left to choose, a small model reached for
@@ -377,7 +411,7 @@ def run_agent(chat_id: str, question: str, history: List[Tuple[str, str]], confi
         # earlier message that says the opposite.
         system_prompt += ("\n\nThe user has told you the following. It is true and overrides anything in the "
                           "documents or the web:\n" + "\n".join(f"- {fact}" for fact in facts))
-    messages = [SystemMessage(content=system_prompt)] + history_to_messages(history) + [HumanMessage(content=question)]
+    messages = [SystemMessage(content=system_prompt)] + history_to_messages(history) + [HumanMessage(content=model_question)]
 
     for number, (doc_name, doc_text) in enumerate(preread, 1):
         yield {"type": "step", "id": number, "tool": "read_document", "args": {"name": doc_name}, "thought": ""}
@@ -387,12 +421,13 @@ def run_agent(chat_id: str, question: str, history: List[Tuple[str, str]], confi
         # thing to answer from; as a made-up tool exchange the 8B model narrated it
         # ("I used the read_document tool...") instead of answering.
         documents = "\n\n".join(f"[{doc_name}]\n{doc_text}" for doc_name, doc_text in preread)
-        messages[-1] = HumanMessage(content=f"{question}\n\n---\nThe user's uploaded "
+        messages[-1] = HumanMessage(content=f"{model_question}\n\n---\nThe user's uploaded "
                                             f"{'documents' if len(preread) > 1 else 'document'}, already read for you. "
                                             f"Answer every part of my request from this text:\n\n{documents}")
 
     steps = len(preread)
     used_web = False
+    looked_up: List[str] = []
 
     def drive(loop):
         """Pass the loop's events through, tallying steps; returns its final answer."""
@@ -405,6 +440,9 @@ def run_agent(chat_id: str, question: str, history: List[Tuple[str, str]], confi
             if event["type"] == "step":
                 steps += 1
                 used_web = used_web or event["tool"] in ("web_search", "fetch_url")
+                note = lookup_note(event["tool"], event.get("args") or {})
+                if note and note not in looked_up:
+                    looked_up.append(note)
             yield event
 
     try:
@@ -429,7 +467,7 @@ def run_agent(chat_id: str, question: str, history: List[Tuple[str, str]], confi
 
     if answer.strip():
         try:
-            context_manager.record_turn(chat_id, question, answer)
+            context_manager.record_turn(chat_id, question, answer, looked_up[:3])
         except Exception as e:
             print(f"WARNING: failed to record context: {e}")
 
