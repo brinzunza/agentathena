@@ -892,7 +892,6 @@ function App() {
 
   const renderChatView = () => (
     <>
-      <div className="title">document q&amp;a</div>
       <div className="subtitle">
         {agentEnabled
           ? 'ask anything · athena searches your documents and the web, calculates and runs code'

@@ -523,16 +523,6 @@ button, input {
   background: var(--color-bg);
 }
 
-.title {
-  flex-shrink: 0;
-  font-family: var(--font-mono);
-  font-size: 34px;
-  font-weight: 400;
-  letter-spacing: -0.01em;
-  padding: 4px 0 6px;
-  color: var(--ink-1);
-}
-
 .subtitle {
   flex-shrink: 0;
   font-size: 13px;
@@ -2166,18 +2156,6 @@ select:focus-visible,
   box-shadow: 0 0 0 2px var(--green-wash);
 }
 
-/* --- Title: blue, with a terminal cursor --- */
-.title {
-  color: var(--blue-strong);
-}
-
-.title::after {
-  content: '_';
-  margin-left: 3px;
-  color: var(--orange);
-  animation: pixel-blink 1.2s steps(1) infinite;
-}
-
 /* --- Buttons and inputs --- */
 .primary-action,
 .send-button {
@@ -2491,7 +2469,6 @@ select:focus-visible,
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .title::after,
   .streaming::after,
   .pixel-loader i {
     animation: none;

@@ -4,7 +4,7 @@ import { KeyIcon, PlusIcon, UploadCloudIcon, MessageIcon, FileTextIcon } from '.
 const WALKTHROUGH = [
   { icon: PlusIcon, title: 'create a chat', body: 'Click "+ New chat" in the sidebar and give it a name. Choose "Start empty," or "Copy from" to branch off an existing chat\'s documents.' },
   { icon: UploadCloudIcon, title: 'upload a pdf', body: 'Drop a file onto the upload area, or click it to browse. A progress bar tracks the conversion — you can keep chatting in other chats while it works.' },
-  { icon: MessageIcon, title: 'ask a question', body: 'Type it into the box at the bottom, like you\'re asking a person. Athena answers using only what it found in that chat\'s documents.' },
+  { icon: MessageIcon, title: 'ask a question', body: 'Type it into the box at the bottom, like you\'re asking a person. Athena decides what it needs: your documents, the web, a calculation or some code.' },
   { icon: FileTextIcon, title: 'check the source', body: 'Click "Source" under an answer to open the original document with the exact passage highlighted.' },
 ];
 

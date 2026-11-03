@@ -206,8 +206,8 @@ with st.sidebar:
     st.markdown('<div class="minimal-card"><p>pdf document analysis</p></div>', unsafe_allow_html=True)
 
 
-# Main Document Q&A Interface
-st.markdown('<div class="main-title">document q&a</div>', unsafe_allow_html=True)
+# Main Interface
+st.markdown('<div class="main-title">agent harness</div>', unsafe_allow_html=True)
 
 # Database initialization flow
 if not has_documents(CHROMA_DB_PATH):

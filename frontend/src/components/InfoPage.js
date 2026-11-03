@@ -65,9 +65,10 @@ function InfoPage() {
       <section className="docs-hero">
         <h1>what is athena?</h1>
         <p>
-          Athena is a document Q&amp;A assistant. Upload your PDFs, then ask questions about
-          them in plain English — Athena answers using only what's actually written in your
-          documents, and shows you exactly where each answer came from.
+          Athena is an agent harness. Give it your PDFs and a question, and it decides which
+          tools to use: searching your documents and the web, doing math, running Python, or
+          researching a topic in the background. Answers drawn from your documents show exactly
+          where they came from.
         </p>
       </section>
 
