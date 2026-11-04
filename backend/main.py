@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Literal
 import os
@@ -296,6 +296,9 @@ def process_documents_background(upload_id: str, file_paths: List[str], chroma_d
 
 @app.get("/")
 async def root():
+    index = _frontend_file("index.html")
+    if index:
+        return FileResponse(index, headers=_NO_CACHE)
     return {"message": "ai assistant api"}
 
 @app.get("/health")
@@ -1061,6 +1064,39 @@ def decide_permission(chat_id: str, request_id: str, decision: PermissionDecisio
     if not agent_tools.resolve_permission_request(chat_id, request_id, decision.approve):
         raise HTTPException(status_code=404, detail="that request has expired or was already answered")
     return {"status": "success"}
+
+
+# --- The built web app ---
+# When `npm run build` has produced frontend/build, the backend serves the app
+# itself, so Athena is one process instead of a Node dev server plus an API.
+
+FRONTEND_BUILD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend", "build")
+_API_PREFIXES = {"chats", "settings", "documents", "health", "docs", "openapi.json"}
+_NO_CACHE = {"Cache-Control": "no-cache"}
+_FOREVER = {"Cache-Control": "public, max-age=31536000, immutable"}   # build/static/* has the content hash in its name
+
+
+def _frontend_file(path: str) -> Optional[str]:
+    """A file inside the build folder, or None. Anything that resolves outside it is refused."""
+    root = os.path.realpath(FRONTEND_BUILD)
+    candidate = os.path.realpath(os.path.join(root, path))
+    if candidate != root and not candidate.startswith(root + os.sep):
+        return None
+    return candidate if os.path.isfile(candidate) else None
+
+
+# Registered last, so every API route above wins; only paths nothing else handled land here
+@app.get("/{path:path}", include_in_schema=False)
+async def frontend(path: str):
+    if path.split("/")[0] in _API_PREFIXES:
+        raise HTTPException(status_code=404, detail="not found")
+    file = _frontend_file(path)
+    if file:
+        return FileResponse(file, headers=_FOREVER if path.startswith("static/") else _NO_CACHE)
+    index = _frontend_file("index.html")
+    if not index:
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(index, headers=_NO_CACHE)       # a page of the single-page app, e.g. a reload on a deep link
 
 
 if __name__ == "__main__":

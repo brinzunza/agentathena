@@ -88,7 +88,27 @@ chmod +x start_frontend.sh
 - App: http://localhost:3000
 - API: http://localhost:8000 (listens on this machine only)
 
+Those are two development servers. To run Athena as a single, lighter process (no Node running), use the next section.
+
 Create a chat, drop in a PDF, and ask a question. Pick your provider and model under **ai provider**, and the tools and code permission under **agent**.
+
+## Run as one process
+
+```bash
+./start_app.sh
+```
+This builds the web app once (and again whenever the interface changes), then serves it and the API together at http://127.0.0.1:8000. It needs no Node process, which is about 600 MB less memory than the development servers. Use `PORT=8001 ./start_app.sh` to pick another port.
+
+## Desktop app (macOS)
+
+A small native window (about 3 MB) around the same backend, with its own icon. It needs [Rust](https://rustup.rs):
+```bash
+cd desktop
+npm install
+npm run build        # builds the web app, then desktop/src-tauri/target/release/bundle/macos/Athena.app
+open src-tauri/target/release/bundle/macos/Athena.app
+```
+Opening the app starts the backend if it isn't already running and stops it when you quit. If a backend is already running on the port, the app uses it and leaves it running. The app finds the project folder from where it was built, so rebuild it if you move the repository, or set `ATHENA_HOME` to the folder. `ATHENA_PORT` changes the port. Backend output goes to `~/Library/Logs/Athena-backend.log`.
 
 ## Configuration
 
@@ -142,6 +162,7 @@ app/                  core logic, shared by the API
   uploads.py            chunked, resumable upload sessions
 backend/main.py       FastAPI server
 frontend/             React app
+desktop/              Tauri desktop window (Rust) around the backend
 tests/                backend tests; tests/live/ for real-model scenarios
 docs/                 demo video
 ```

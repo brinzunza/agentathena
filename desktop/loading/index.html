@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Athena</title>
+  <style>
+    :root { --bg: #ECE2CE; --ink: #22303C; --blue: #276488; --orange: #E08838; --green: #4C8564; --red: #A63D2A; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #0A141B; --ink: #EFE6D6; --blue: #6DB4D6; --orange: #EBA05E; --green: #86C79B; --red: #EC917F; }
+    }
+    html, body { height: 100%; margin: 0; }
+    body {
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+      background: var(--bg); color: var(--ink);
+      font: 14px ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .dots { display: flex; gap: 8px; }
+    .dots i { width: 10px; height: 10px; animation: hop 0.9s steps(2) infinite; }
+    .dots i:nth-child(1) { background: var(--blue); }
+    .dots i:nth-child(2) { background: var(--orange); animation-delay: 0.15s; }
+    .dots i:nth-child(3) { background: var(--green); animation-delay: 0.3s; }
+    @keyframes hop { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+    body[data-state="failed"] .dots { display: none; }
+    body[data-state="failed"] #message { color: var(--red); max-width: 420px; text-align: center; line-height: 1.5; }
+    @media (prefers-reduced-motion: reduce) { .dots i { animation: none; } }
+  </style>
+</head>
+<body>
+  <div class="dots" aria-hidden="true"><i></i><i></i><i></i></div>
+  <div id="message">starting athena</div>
+</body>
+</html>

@@ -46,6 +46,9 @@ def test_config_defaults_roundtrip_and_validation(client, api_chat):
 # --- context ---
 
 def test_context_endpoints(client, api_chat, monkeypatch):
+    # "forget" asks the model about entries that don't mention the topic; a stand-in says no
+    monkeypatch.setattr(context_manager, "get_topic_matcher",
+                        lambda: type("Matcher", (), {"invoke": staticmethod(lambda inputs: "No.")})())
     context_manager.record_turn(api_chat, "my name is John", "ok")
     context_manager.record_turn(api_chat, "capital of France?", "Paris")
     body = client.get(f"/chats/{api_chat}/context").json()

@@ -27,3 +27,8 @@ __pycache__/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Desktop app
+desktop/node_modules/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
