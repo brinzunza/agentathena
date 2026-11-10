@@ -156,6 +156,71 @@ def record_turn(chat_id: str, question: str, answer: str, looked_up: Optional[Li
     chat_manager.update_context(chat_id, lambda entries: entries + [entry])
 
 
+def add_turns(chat_id: str, turns: List[dict]) -> int:
+    """
+    Append exchanges that came from somewhere else (a merged branch) to the
+    chat's context, each with a fresh id. A turn is {question, answer} and
+    optionally `looked_up`. Never adds a summary, so the context keeps at most
+    one, first.
+
+    Returns:
+        How many exchanges were added
+    """
+    entries = []
+    for turn in turns:
+        entry = {
+            "id": _new_id(),
+            "kind": "turn",
+            "question": turn["question"],
+            "answer": turn["answer"],
+            "created_at": _now(),
+        }
+        if turn.get("looked_up"):
+            entry["looked_up"] = list(turn["looked_up"])
+        entries.append(entry)
+    if entries:
+        chat_manager.update_context(chat_id, lambda current: current + entries)
+    return len(entries)
+
+
+def trim_to_messages(entries: List[dict], kept: List[dict], removed: List[dict]) -> List[dict]:
+    """
+    A branch made partway through a chat should remember only what had
+    happened by then. Context entries aren't linked to messages, except that
+    an exchange is stored under its question, so: drop the exchanges whose
+    question was asked only in the `removed` messages, and keep everything
+    else (the summary, notes the user asked it to remember, exchanges
+    whose question appears in the messages that are kept).
+    """
+    kept_questions = {m.get("content") for m in kept if m.get("role") == "user"}
+    removed_questions = {m.get("content") for m in removed if m.get("role") == "user"} - kept_questions
+    return [e for e in entries if e["kind"] != "turn" or e["question"] not in removed_questions]
+
+
+def summarize_branch(branch_name: str, messages: List[dict], focus: str = "") -> str:
+    """
+    Summarize the exchanges in `messages` (a branch's messages since it was
+    made) for adding to the chat it came from.
+
+    Raises:
+        ValueError: if there's nothing to summarize or the model returned nothing
+    """
+    pieces = []
+    question = None
+    for message in messages:
+        if message.get("role") == "user" and isinstance(message.get("content"), str):
+            question = message["content"]
+        elif message.get("role") == "assistant" and question is not None and isinstance(message.get("content"), str) and message["content"].strip():
+            pieces.append(_render_entry({"kind": "turn", "question": question, "answer": message["content"]}))
+            question = None
+    if not pieces:
+        raise ValueError(f"Nothing in the branch “{branch_name}” to summarize yet")
+    summary_text = _fold_into_summary(pieces, focus.strip())
+    if not summary_text:
+        raise ValueError("The model returned an empty summary")
+    return summary_text
+
+
 def delete_entry(chat_id: str, entry_id: str) -> bool:
     """Remove one context entry. Returns False if there was no such entry."""
     found = False

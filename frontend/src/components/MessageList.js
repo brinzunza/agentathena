@@ -11,7 +11,7 @@ const playedIn = (chatId) => (played[chatId] = played[chatId] || new Set());
 
 function MessageList({
   chatId, onDecidePermission, messages, expandedSources, onToggleSources, onViewSource, onOpenSettings,
-  canRedo, onRegenerate, onEdit, animateFrom = Infinity, focus = null, onFocusDone
+  canRedo, onRegenerate, onEdit, onBranch, animateFrom = Infinity, focus = null, onFocusDone
 }) {
   const scroller = useRef(null);
   const content = useRef(null);
@@ -96,6 +96,7 @@ function MessageList({
             canRedo={canRedo}
             onRegenerate={onRegenerate}
             onEdit={onEdit}
+            onBranch={onBranch ? () => onBranch(index) : undefined}
             pixel={index >= animateFrom && !playedIn(chatId).has(index)
               ? { onDone: () => playedIn(chatId).add(index) }
               : null}

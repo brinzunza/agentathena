@@ -23,6 +23,7 @@ A 1½-minute walkthrough: upload a PDF, ask about it, and watch the agent use to
   - exact arithmetic, and today's date
   - run Python for analysis and coding
   - manage its own memory, only when you ask it to
+- **Branches.** Fork a chat to follow a side question without touching the main one. A branch starts with a snapshot of the chat's messages, memory and documents (so it keeps working if the original is deleted), nests under it in the sidebar, and can be branched again. Merge it back by picking answers, adding a summary, or replacing the main chat. Documents added in a branch stay in the branch.
 - **Small documents are read whole.** If you say "this project" or "my homework" and what you uploaded is short (about 9,000 characters or less), it is handed to the model directly instead of searched.
 - **Code runs with your permission.** Three modes per chat: *safe* (never runs code), *ask first* (shows the code and waits, the default) and *bypass*.
 - **Memory you control.** The context the model sees is stored per chat, editable, and sized by a token budget. Edit it from the context screen or with slash commands.
@@ -40,6 +41,8 @@ A 1½-minute walkthrough: upload a PDF, ask about it, and watch the agent use to
 | `/context keep only info on <topic>` | The reverse: drop everything unrelated to a topic |
 | `/context clear` | Empty the context |
 | `/research <topic>` | Start a background research report |
+| `/branch [name]` | Fork this chat into a branch |
+| `/merge` | Merge the open branch into the chat it came from |
 
 ## How it works
 
@@ -159,6 +162,7 @@ app/                  core logic, shared by the API
   pdf_converter.py      PDF to Markdown with image descriptions
   qa_workflow.py        LangGraph workflow (classic pipeline)
   chat_manager.py       per-chat storage: messages, context, config
+  branches.py           forking a chat and merging a branch back
   uploads.py            chunked, resumable upload sessions
 backend/main.py       FastAPI server
 frontend/             React app

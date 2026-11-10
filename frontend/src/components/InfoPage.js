@@ -42,6 +42,10 @@ const FAQS = [
     a: "Yes. Under the last reply, regenerate asks the same question again and copy puts the answer on your clipboard. Under your last message, edit puts the question back in the box. Either way the old answer is also forgotten from the context so it isn't counted twice. Replies are formatted (lists, tables, code), and a finished research report can be downloaded as a Markdown file.",
   },
   {
+    q: 'what are branches?',
+    a: "A branch is a copy of a chat you can take in another direction without touching the original. Press branch chat, type /branch, or press branch under any reply to start one from that point. It begins with the messages, memory and documents the chat had then, and the two never affect each other afterwards, even if the original is deleted. When something in a branch turns out to matter, merge into parent lets you pick answers to bring over, add a summary of the branch, or replace the main chat with it. Documents added in a branch stay in the branch.",
+  },
+  {
     q: 'what is /research?',
     a: "Type /research followed by a topic for a longer investigation. Athena breaks the topic into sub-questions, researches each with your documents and the web in the background, then writes a report. You can keep chatting, leave and come back, or cancel it. Background research only runs code if the chat is set to bypass.",
   },

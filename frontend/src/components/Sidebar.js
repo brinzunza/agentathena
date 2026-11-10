@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import PixelOverlay from './PixelOverlay';
+import { buildChatTree } from '../branches';
 
 function Sidebar({
   chats,
@@ -7,6 +8,9 @@ function Sidebar({
   onSwitchChat,
   onNewChat,
   onDeleteChat,
+  onBranch,
+  onOpenMerge,
+  onRename,
   onClearChat,
   onResetDatabase,
   onOpenLibrary,
@@ -26,7 +30,33 @@ function Sidebar({
   // Which destructive button is waiting for a second click: 'clear' | 'reset' | 'delete'
   const [confirming, setConfirming] = useState(null);
 
-  useEffect(() => setConfirming(null), [activeChatId]);
+  const [renaming, setRenaming] = useState(false);
+  const [draftName, setDraftName] = useState('');
+
+  useEffect(() => {
+    setConfirming(null);
+    setRenaming(false);
+  }, [activeChatId]);
+
+  const activeChat = chats.find((chat) => chat.id === activeChatId);
+  const parentChat = activeChat?.parent_id ? chats.find((chat) => chat.id === activeChat.parent_id) : null;
+  const branchCount = chats.filter((chat) => chat.parent_id === activeChatId).length;
+
+  // Enter and leaving the field both finish a rename, and unmounting the field can fire the
+  // second one, so only the first counts. Escape cancels.
+  const renameDone = useRef(false);
+  const startRename = () => {
+    renameDone.current = false;
+    setDraftName(activeChat?.name || '');
+    setRenaming(true);
+  };
+  const finishRename = (save) => {
+    if (renameDone.current) return;
+    renameDone.current = true;
+    setRenaming(false);
+    const name = draftName.trim();
+    if (save && name && name !== activeChat?.name) onRename(activeChatId, name);
+  };
 
   // Chats present when the list first loaded don't animate; one that appears later does
   const knownChats = useRef(null);
@@ -62,11 +92,13 @@ function Sidebar({
       <div className="sidebar-section">
         <div className="sidebar-label">chats</div>
         <div className="chat-list">
-          {chats.map((chat) => (
+          {buildChatTree(chats).map(({ chat, depth }) => (
             <div
               key={chat.id}
-              className={`chat-list-item ${chat.id === activeChatId ? 'active' : ''}`}
+              className={`chat-list-item ${chat.id === activeChatId ? 'active' : ''} ${depth > 0 ? 'chat-list-branch' : ''}`}
+              style={depth > 0 ? { marginRight: Math.min(depth, 4) * 12 } : undefined}
               onClick={() => onSwitchChat(chat.id)}
+              title={chat.name}
             >
               <span className="chat-list-name">{chat.name}</span>
               {knownChats.current && !knownChats.current.has(chat.id) && (
@@ -110,9 +142,38 @@ function Sidebar({
               )}
               context
             </button>
+            <button onClick={onBranch} className="nav-item" disabled={loading} title="fork this chat: the branch starts with its messages, memory and documents">
+              branch chat
+            </button>
+            {parentChat && (
+              <button onClick={onOpenMerge} className="nav-item" disabled={loading} title={`merge into “${parentChat.name}”`}>
+                merge into parent
+              </button>
+            )}
+            {renaming ? (
+              <form className="sidebar-rename" onSubmit={(e) => { e.preventDefault(); finishRename(true); }}>
+                <input
+                  className="field-input"
+                  value={draftName}
+                  maxLength={80}
+                  autoFocus
+                  onFocus={(e) => e.target.select()}
+                  aria-label="chat name"
+                  onChange={(e) => setDraftName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Escape') finishRename(false); }}
+                  onBlur={() => finishRename(true)}
+                />
+              </form>
+            ) : (
+              <button onClick={startRename} className="nav-item">
+                rename
+              </button>
+            )}
             {confirmable('clear', 'clear chat', 'clear this chat?', onClearChat)}
             {confirmable('reset', 'reset database', 'reset database?', onResetDatabase)}
-            {confirmable('delete', 'delete chat', 'delete this chat?', () => onDeleteChat(activeChatId))}
+            {confirmable('delete', 'delete chat',
+              branchCount > 0 ? `delete this chat? its ${branchCount === 1 ? 'branch stays' : `${branchCount} branches stay`}` : 'delete this chat?',
+              () => onDeleteChat(activeChatId))}
           </div>
 
           <div className="sidebar-status">

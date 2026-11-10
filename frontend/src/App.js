@@ -13,10 +13,11 @@ import ApiKeyModal from './components/ApiKeyModal';
 import ContextModal from './components/ContextModal';
 import SearchModal from './components/SearchModal';
 import AgentModal from './components/AgentModal';
+import MergeModal from './components/MergeModal';
 import InfoPage from './components/InfoPage';
 import SetupPage from './components/SetupPage';
 import { UploadCloudIcon } from './components/Icons';
-import { CONTEXT_USAGE, RESEARCH_USAGE, parseContextCommand, parseResearchCommand } from './commands';
+import { BRANCH_USAGE, CONTEXT_USAGE, RESEARCH_USAGE, parseBranchCommand, parseContextCommand, parseResearchCommand } from './commands';
 import { canRedoLast, rewindLastExchange } from './chatHistory';
 import { UploadInterrupted, isAbort, uploadFiles } from './uploader';
 import { createUploadApi, sha256Hex, waitForOnline } from './uploadApi';
@@ -82,6 +83,7 @@ function App() {
   const [showSearch, setShowSearch] = useState(false);
   const [searchFocus, setSearchFocus] = useState(null);   // {chatId, index}: a message to scroll to once its chat is showing
   const [showAgent, setShowAgent] = useState(false);
+  const [showMerge, setShowMerge] = useState(false);
   const [chatConfig, setChatConfig] = useState(null);
   const [contextUsageByChat, setContextUsageByChat] = useState({});
   const [unfinishedByChat, setUnfinishedByChat] = useState({});
@@ -237,6 +239,7 @@ function App() {
     setActiveChatId(chatId);
     setShowLibrary(false);
     setShowContext(false);
+    setShowMerge(false);
     setViewingSource(null);
     setView('chat');
     setTransitionPreset('switch');
@@ -271,6 +274,66 @@ function App() {
     setShowNewChatModal(false);
   };
 
+  // Drops everything the page remembers about a chat that no longer exists
+  const forgetChat = (chatId) => {
+    [setMessagesByChat, setUploadQueueByChat, setLoadingByChat, setDbStatusByChat, setExpandedSourcesByChat].forEach(setter => {
+      setter(prev => {
+        const next = { ...prev };
+        delete next[chatId];
+        return next;
+      });
+    });
+    loadedMessagesRef.current.delete(chatId);
+    delete baselineRef.current[chatId];
+  };
+
+  // Shows a note in a chat that isn't part of the conversation with the model
+  const addNote = (chatId, role, content) => updateMessages(chatId, prev => {
+    const next = [...prev, { role, content }];
+    persistMessages(chatId, next);
+    return next;
+  });
+
+  // Forks a chat. Branching at a message (atIndex) keeps the messages up to it; otherwise all of them.
+  const handleBranch = async (chatId, atIndex = null, name = null) => {
+    try {
+      const { data } = await axios.post(`${API_BASE}/chats/${chatId}/branch`, { name: name || null, at_index: atIndex });
+      setChats(prev => [...prev, data]);
+      switchChat(data.id);
+      setTransitionPreset('create');
+    } catch (error) {
+      addNote(chatId, 'error', readApiError(error).message);
+    }
+  };
+
+  const handleRename = async (chatId, name) => {
+    try {
+      const { data } = await axios.patch(`${API_BASE}/chats/${chatId}`, { name });
+      setChats(prev => prev.map(c => (c.id === chatId ? { ...c, name: data.name } : c)));
+    } catch (error) {
+      console.error('failed to rename chat:', error);
+    }
+  };
+
+  // Merges the open branch into its parent; throws so the merge dialog can show why it failed
+  const handleMerge = async (request) => {
+    const branchId = activeChatId;
+    const { data } = await axios.post(`${API_BASE}/chats/${branchId}/merge`, request);
+    const parentId = data.parent_id;
+
+    // The server changed the parent's messages, so the page takes the merged list rather than
+    // saving its own copy over it. Only what was added animates in.
+    loadedMessagesRef.current.add(parentId);
+    baselineRef.current[parentId] = request.mode === 'replace' ? data.messages.length : data.messages.length - data.added;
+    setMessagesByChat(prev => ({ ...prev, [parentId]: data.messages }));
+    if (data.deleted) forgetChat(branchId);
+
+    setShowMerge(false);
+    await refreshChats();
+    switchChat(parentId);
+    refreshContextUsage(parentId);
+  };
+
   const handleDeleteChat = async (chatId) => {
     const remaining = chats.filter(c => c.id !== chatId);
     try {
@@ -281,13 +344,8 @@ function App() {
     }
 
     setChats(remaining);
-    [setMessagesByChat, setUploadQueueByChat, setLoadingByChat, setDbStatusByChat, setExpandedSourcesByChat].forEach(setter => {
-      setter(prev => {
-        const next = { ...prev };
-        delete next[chatId];
-        return next;
-      });
-    });
+    forgetChat(chatId);
+    refreshChats();      // its branches moved up to its own parent
 
     if (activeChatId === chatId) {
       if (remaining.length > 0) {
@@ -649,6 +707,19 @@ function App() {
       return;
     }
 
+    const branchCommand = parseBranchCommand(text);
+    if (branchCommand) {
+      setInput('');
+      if (branchCommand.type === 'branch') {
+        await handleBranch(chatId, null, branchCommand.name);
+      } else if (chats.find(c => c.id === chatId)?.parent_id) {
+        setShowMerge(true);
+      } else {
+        addNote(chatId, 'system', `this chat isn't a branch, so there is nothing to merge into. ${BRANCH_USAGE}`);
+      }
+      return;
+    }
+
     const currentInput = text;
     setInput('');
 
@@ -909,6 +980,8 @@ function App() {
   const unfinished = (unfinishedByChat[activeChatId] || []).filter(item => !handledIds.has(item.upload_id));
 
   const agentEnabled = !!chatConfig?.agent_enabled;
+  const activeChat = chats.find(c => c.id === activeChatId);
+  const parentChat = activeChat?.parent_id ? chats.find(c => c.id === activeChat.parent_id) : null;
   const canChat = !!activeChatId && (dbStatus.exists || agentEnabled);
 
   const renderChatView = () => (
@@ -972,6 +1045,7 @@ function App() {
             canRedo={!loading && canRedoLast(messages)}
             onRegenerate={() => redoLastExchange('regenerate')}
             onEdit={() => redoLastExchange('edit')}
+            onBranch={loading ? undefined : (index) => handleBranch(activeChatId, index)}
           />
           <ChatInput
             input={input}
@@ -1002,6 +1076,9 @@ function App() {
           onSwitchChat={switchChat}
           onNewChat={() => setShowNewChatModal(true)}
           onDeleteChat={handleDeleteChat}
+          onBranch={() => handleBranch(activeChatId)}
+          onOpenMerge={() => setShowMerge(true)}
+          onRename={handleRename}
           onClearChat={clearChat}
           onResetDatabase={resetDatabase}
           onOpenLibrary={() => setShowLibrary(true)}
@@ -1047,6 +1124,17 @@ function App() {
             chatId={activeChatId}
             onChanged={setChatConfig}
             onClose={() => setShowAgent(false)}
+          />
+        )}
+
+        {showMerge && activeChat?.parent_id && parentChat && (
+          <MergeModal
+            branch={activeChat}
+            parent={parentChat}
+            messages={messages}
+            parentBusy={!!loadingByChat[parentChat.id]}
+            onMerge={handleMerge}
+            onClose={() => setShowMerge(false)}
           />
         )}
 

@@ -29,7 +29,7 @@ function CopyButton({ text }) {
 
 function Message({
   chatId, message, expanded, onToggleSources, onViewSource, onOpenSettings, onDecidePermission,
-  isLastReply, canRedo, onRegenerate, onEdit, pixel
+  isLastReply, canRedo, onRegenerate, onEdit, onBranch, pixel
 }) {
   const sources = message.sources || [];
 
@@ -96,6 +96,11 @@ function Message({
           <CopyButton text={message.content} />
           {isLastReply && canRedo && (
             <button type="button" className="message-action" onClick={onRegenerate}>regenerate</button>
+          )}
+          {onBranch && (
+            <button type="button" className="message-action" onClick={onBranch} title="continue from this message in a new branch">
+              branch
+            </button>
           )}
         </MessageActions>
       )}

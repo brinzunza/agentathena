@@ -2551,3 +2551,104 @@ select:focus-visible,
     background: var(--orange-wash);
   }
 }
+
+/* --- Branches --- */
+
+/* A branch sits under the chat it came from, indented (the list is right-aligned, so deeper moves left) */
+.chat-list-branch .chat-list-name::before {
+  content: '└ ';
+  font-family: var(--font-mono);
+  color: var(--ink-3);
+}
+
+.sidebar-rename {
+  display: flex;
+  justify-content: flex-end;
+  padding: 2px 6px;
+}
+
+.sidebar-rename .field-input {
+  width: 100%;
+  font-size: 13px;
+  text-align: right;
+}
+
+.merge-form {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* in a short window the form scrolls instead of squeezing its rows */
+.merge-form > * {
+  flex-shrink: 0;
+}
+
+.merge-note {
+  margin: 2px 0 8px 24px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.merge-picks {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--line);
+}
+
+.merge-link {
+  align-self: flex-end;
+  padding: 6px 0;
+  background: none;
+  border: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.merge-link:hover {
+  color: var(--blue);
+}
+
+.merge-pick {
+  display: flex;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.merge-pick input {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
+.merge-pick-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.merge-pick-answer {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.merge-warning {
+  margin: 4px 0 8px 24px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--red);
+}
+
+.merge-delete {
+  margin-top: 8px;
+}

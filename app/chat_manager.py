@@ -10,6 +10,10 @@ from document_processor import list_documents
 
 CHATS_ROOT = "chats"
 
+# Serializes read-modify-write cycles on messages.json (see update_messages).
+_messages_lock = threading.RLock()
+_meta_lock = threading.Lock()
+
 
 def _chat_dir(chat_id: str) -> str:
     return os.path.join(CHATS_ROOT, chat_id)
@@ -79,10 +83,24 @@ def save_messages(chat_id: str, messages: List[dict]) -> None:
     Raises:
         ValueError: if the chat doesn't exist
     """
-    if not chat_exists(chat_id):
-        raise ValueError(f"Chat not found: {chat_id}")
-    with open(_messages_path(chat_id), "w", encoding="utf-8") as f:
-        json.dump(messages, f)
+    update_messages(chat_id, lambda _: messages)
+
+
+def update_messages(chat_id: str, updater) -> List[dict]:
+    """
+    Atomically apply updater(messages) -> new_messages to a chat's history.
+
+    Merging a branch appends to its parent's messages on the server, which
+    must not interleave with the client saving the same list.
+
+    Raises:
+        ValueError: if the chat doesn't exist
+    """
+    with _messages_lock:
+        messages = get_messages(chat_id)
+        new_messages = updater(messages)
+        _write_json_atomic(_messages_path(chat_id), new_messages)
+        return new_messages
 
 
 def get_chat_paths(chat_id: str):
@@ -109,7 +127,7 @@ def list_chats() -> List[dict]:
     List all chats with their document counts, oldest first.
 
     Returns:
-        List of {id, name, created_at, document_count} dicts
+        List of {id, name, created_at, document_count, parent_id, branch_point} dicts
     """
     if not os.path.exists(CHATS_ROOT):
         return []
@@ -123,6 +141,8 @@ def list_chats() -> List[dict]:
             meta = json.load(f)
         chroma_db_path, files_path = get_chat_paths(entry)
         meta["document_count"] = len(list_documents(chroma_db_path, files_path))
+        meta.setdefault("parent_id", None)
+        meta.setdefault("branch_point", None)
         chats.append(meta)
 
     chats.sort(key=lambda c: c["created_at"])
@@ -194,7 +214,8 @@ def search_chats(query: str, limit: int = 50, per_chat: int = 5) -> List[dict]:
     return results[:limit]
 
 
-def create_chat(name: str, copy_from: Optional[str] = None, in_progress_upload_chat_ids: Optional[set] = None) -> dict:
+def create_chat(name: str, copy_from: Optional[str] = None, in_progress_upload_chat_ids: Optional[set] = None,
+                parent_id: Optional[str] = None, branch_point: Optional[int] = None) -> dict:
     """
     Create a new chat, either empty or as a copy of another chat's documents.
 
@@ -209,6 +230,9 @@ def create_chat(name: str, copy_from: Optional[str] = None, in_progress_upload_c
         in_progress_upload_chat_ids: chat ids that currently have an upload in
             progress (from backend/main.py's upload_progress) - copying a
             chat mid-write risks cloning a half-written collection
+        parent_id, branch_point: set when the chat is a branch of another
+            (see branches.create_branch): the chat it came from, and how many
+            of that chat's messages it started with
 
     Returns:
         The new chat's metadata dict (matches list_chats()'s shape)
@@ -240,17 +264,79 @@ def create_chat(name: str, copy_from: Optional[str] = None, in_progress_upload_c
         "name": name,
         "created_at": datetime.now().isoformat(),
     }
+    if parent_id is not None:
+        meta["parent_id"] = parent_id
+        meta["branch_point"] = branch_point
     with open(_meta_path(chat_id), "w", encoding="utf-8") as f:
         json.dump(meta, f)
 
     chroma_db_path, files_path = get_chat_paths(chat_id)
     meta["document_count"] = len(list_documents(chroma_db_path, files_path))
+    meta.setdefault("parent_id", None)
+    meta.setdefault("branch_point", None)
     return meta
+
+
+def get_meta(chat_id: str) -> dict:
+    """
+    A chat's stored metadata: {id, name, created_at, parent_id, branch_point}.
+
+    Raises:
+        ValueError: if the chat doesn't exist
+    """
+    if not chat_exists(chat_id):
+        raise ValueError(f"Chat not found: {chat_id}")
+    with open(_meta_path(chat_id), "r", encoding="utf-8") as f:
+        meta = json.load(f)
+    meta.setdefault("parent_id", None)
+    meta.setdefault("branch_point", None)
+    return meta
+
+
+def update_meta(chat_id: str, **fields) -> dict:
+    """Change fields of a chat's metadata (not its id). Returns the new metadata."""
+    with _meta_lock:
+        meta = get_meta(chat_id)
+        meta.update({key: value for key, value in fields.items() if key != "id"})
+        _write_json_atomic(_meta_path(chat_id), meta)
+        return meta
+
+
+def rename_chat(chat_id: str, name: str) -> dict:
+    """
+    Give a chat a new display name.
+
+    Raises:
+        ValueError: if the chat doesn't exist or the name is empty or too long
+    """
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("A chat name can't be empty")
+    if len(name) > MAX_CHAT_NAME_CHARS:
+        raise ValueError(f"A chat name can be at most {MAX_CHAT_NAME_CHARS} characters")
+    return update_meta(chat_id, name=name)
+
+
+MAX_CHAT_NAME_CHARS = 80
+
+
+def get_children(chat_id: str) -> List[str]:
+    """Ids of the chats branched directly from this one."""
+    if not os.path.exists(CHATS_ROOT):
+        return []
+    children = []
+    for entry in os.listdir(CHATS_ROOT):
+        if entry != chat_id and os.path.exists(_meta_path(entry)) and get_meta(entry).get("parent_id") == chat_id:
+            children.append(entry)
+    return children
 
 
 def delete_chat(chat_id: str) -> bool:
     """
     Delete a chat entirely - its documents, files, and metadata.
+
+    Branches of the chat survive: each holds its own copy of the documents, and
+    moves up to be a branch of the deleted chat's parent (or a top-level chat).
 
     Args:
         chat_id: The chat's id
@@ -260,7 +346,11 @@ def delete_chat(chat_id: str) -> bool:
     """
     if not chat_exists(chat_id):
         return False
+    grandparent = get_meta(chat_id).get("parent_id")
+    children = get_children(chat_id)
     shutil.rmtree(_chat_dir(chat_id))
+    for child in children:
+        update_meta(child, parent_id=grandparent)
     return True
 
 

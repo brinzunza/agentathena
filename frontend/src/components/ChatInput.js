@@ -25,7 +25,7 @@ function ChatInput({ input, setInput, onSubmit, onCancel, canChat, loading, agen
       </div>
       {input.startsWith('/') && (
         <div className="command-hint">
-          <code>/context</code> view and edit · <code>/compact</code> · <code>/forget &lt;topic&gt;</code> · <code>/context keep only info on …</code> · <code>/context clear</code> · <code>/research &lt;topic&gt;</code>
+          <code>/context</code> view and edit · <code>/compact</code> · <code>/forget &lt;topic&gt;</code> · <code>/context keep only info on …</code> · <code>/context clear</code> · <code>/research &lt;topic&gt;</code> · <code>/branch [name]</code> · <code>/merge</code>
         </div>
       )}
     </form>

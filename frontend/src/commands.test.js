@@ -1,4 +1,4 @@
-import { parseContextCommand, parseResearchCommand } from './commands';
+import { parseBranchCommand, parseContextCommand, parseResearchCommand } from './commands';
 
 describe('parseContextCommand', () => {
   test.each([
@@ -70,4 +70,23 @@ describe('parseResearchCommand', () => {
     expect(parseResearchCommand('/researcher')).toBeNull();
     expect(parseResearchCommand('/context')).toBeNull();
   });
+});
+
+describe('parseBranchCommand', () => {
+  test.each([
+    ['/branch', { type: 'branch', name: '' }],
+    ['/BRANCH', { type: 'branch', name: '' }],
+    ['  /branch  ', { type: 'branch', name: '' }],
+    ['/branch try the other plan', { type: 'branch', name: 'try the other plan' }],
+    ['/branch   spaced   ', { type: 'branch', name: 'spaced' }],
+    ['/merge', { type: 'merge' }],
+    ['/Merge now', { type: 'merge' }],
+  ])('%s', (input, expected) => {
+    expect(parseBranchCommand(input)).toEqual(expected);
+  });
+
+  test.each(['hello', 'branch', '/branching', '/mergers', 'please /branch', '/context', '/research x'])(
+    'ordinary text is not a command: %s',
+    (input) => expect(parseBranchCommand(input)).toBeNull(),
+  );
 });

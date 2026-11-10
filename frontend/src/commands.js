@@ -55,3 +55,13 @@ export function parseResearchCommand(text) {
   const match = text.trim().match(/^\/research(?:\s+(.*))?$/i);
   return match ? { topic: (match[1] || '').trim() } : null;
 }
+
+export const BRANCH_USAGE = 'usage: /branch [name] starts a branch from here · /merge opens the merge options for a branch';
+
+// Parses "/branch [name]" and "/merge"; returns null for ordinary messages.
+export function parseBranchCommand(text) {
+  const match = text.trim().match(/^\/(branch|merge)(?:\s+(.*))?$/i);
+  if (!match) return null;
+  if (match[1].toLowerCase() === 'merge') return { type: 'merge' };
+  return { type: 'branch', name: (match[2] || '').trim() };
+}

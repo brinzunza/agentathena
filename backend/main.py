@@ -19,6 +19,7 @@ from document_processor import get_retriever, index_documents, list_documents, d
 from qa_workflow import build_graph as build_qa_graph
 import chat_manager
 import context_manager
+import branches
 import agent_tools
 import research
 import uploads
@@ -113,10 +114,28 @@ class ChatInfo(BaseModel):
     name: str
     created_at: str
     document_count: int
+    # Set when the chat is a branch of another: that chat, and how many of its
+    # messages the branch started with.
+    parent_id: Optional[str] = None
+    branch_point: Optional[int] = None
 
 class CreateChatRequest(BaseModel):
     name: str
     copy_from: Optional[str] = None
+
+class RenameChatRequest(BaseModel):
+    name: str
+
+class BranchRequest(BaseModel):
+    name: Optional[str] = None
+    # Branch from this message (0-based, as saved) instead of from the end
+    at_index: Optional[int] = Field(default=None, ge=0)
+
+class MergeRequest(BaseModel):
+    mode: Literal["pick", "summary", "replace"]
+    message_indexes: Optional[List[int]] = None
+    focus: str = Field(default="", max_length=500)
+    delete_branch: bool = False
 
 class ApiKeyStatus(BaseModel):
     # has_key / masked_key describe the provider currently answering; the
@@ -418,6 +437,47 @@ async def create_chat(request: CreateChatRequest):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"failed to create chat: {str(e)}")
+
+@app.patch("/chats/{chat_id}")
+def rename_chat(chat_id: str, request: RenameChatRequest):
+    """Rename a chat"""
+    try:
+        chat_manager.rename_chat(chat_id, request.name)
+        chat = next(c for c in chat_manager.list_chats() if c["id"] == chat_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404 if "not found" in str(e) else 400, detail=str(e))
+    return ChatInfo(**chat)
+
+@app.post("/chats/{chat_id}/branch")
+def branch_chat(chat_id: str, request: Optional[BranchRequest] = None):
+    """Fork a chat: the branch carries on from a snapshot of its messages, memory and documents"""
+    request = request or BranchRequest()
+    try:
+        chat = branches.create_branch(
+            chat_id, request.name, request.at_index,
+            in_progress_upload_chat_ids=in_progress_upload_chat_ids(),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404 if "not found" in str(e) else 400, detail=str(e))
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"failed to branch chat: {str(e)}")
+    return ChatInfo(**chat)
+
+@app.post("/chats/{chat_id}/merge")
+def merge_branch(chat_id: str, request: MergeRequest):
+    """Merge a branch back into the chat it came from"""
+    resolve_chat_paths(chat_id)
+    try:
+        return branches.merge_into_parent(
+            chat_id, request.mode, request.message_indexes, request.focus, request.delete_branch
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        traceback.print_exc()
+        code, message_text = classify_llm_error(e)
+        raise HTTPException(status_code=500, detail={"message": f"failed to merge branch: {message_text}", "code": code})
 
 @app.delete("/chats/{chat_id}")
 async def remove_chat(chat_id: str):

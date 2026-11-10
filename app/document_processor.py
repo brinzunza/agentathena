@@ -248,9 +248,11 @@ def index_documents(
 
     with _index_lock:
         result = vectorstore.get(include=["metadatas"])
-        indexed_sources = {m.get('file_name') for m in result["metadatas"]}
+        # By file name, not path: a chat cloned from another (or branched) has
+        # chunks that still name the original's folder.
+        indexed_sources = {os.path.basename(m.get('file_name') or "") for m in result["metadatas"]}
 
-    new_files = [f for f in md_files if f not in indexed_sources]
+    new_files = [f for f in md_files if os.path.basename(f) not in indexed_sources]
 
     if not new_files:
         print("No new files to index")
