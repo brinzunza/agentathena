@@ -18,6 +18,8 @@ function Sidebar({
   onOpenSearch,
   contextUsage,
   onOpenAgent,
+  terminalOpen,
+  onToggleTerminal,
   onOpenApiKey,
   apiKeyStatus,
   view,
@@ -136,6 +138,14 @@ function Sidebar({
             <div className="sidebar-label">session</div>
             <button onClick={onOpenAgent} className="nav-item">
               agent
+            </button>
+            <button
+              onClick={onToggleTerminal}
+              className={`nav-item ${terminalOpen ? 'active' : ''}`}
+              aria-pressed={terminalOpen}
+              title="show what the agent is doing, live (ctrl + `)"
+            >
+              terminal
             </button>
             <button onClick={onOpenContext} className="nav-item">
               {contextUsage?.enabled && contextUsage.total_exchanges > 0 && (

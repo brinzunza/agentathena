@@ -6,12 +6,6 @@
 
 A document-grounded AI agent. Upload PDFs, ask questions about them, and let the assistant search your documents and the web, do math, run Python, and research a topic in the background. It runs on OpenAI, Claude, or a local model through Ollama, so it can work with no API key and nothing leaving your machine.
 
-## Demo
-
-<video src="https://github.com/user-attachments/assets/b3714e3c-27b7-483c-bcfb-709182ac769b" controls muted width="100%"></video>
-
-A 1½-minute walkthrough: upload a PDF, ask about it, and watch the agent use tools.
-
 ## What it does
 
 - **Chats with their own documents.** Each chat has its own set of PDFs. A new chat can start empty or copy another chat's documents.
@@ -28,8 +22,9 @@ A 1½-minute walkthrough: upload a PDF, ask about it, and watch the agent use to
 - **Code runs with your permission.** Three modes per chat: *safe* (never runs code), *ask first* (shows the code and waits, the default) and *bypass*.
 - **Memory you control.** The context the model sees is stored per chat, editable, and sized by a token budget. Edit it from the context screen or with slash commands.
 - **Background research.** `/research <topic>` plans sub-questions, investigates each with your documents and the web, and writes a report you can download as Markdown. It keeps running if you leave the chat.
+- **Terminal.** A read-only console under the chat (`terminal` in the sidebar, or ctrl + `) that logs what the agent does as it does it: each tool call, the Python it ran, and what came back. It runs nothing itself.
 - **Chat niceties.** Markdown rendering (tables, code, lists), copy, regenerate and edit-last-message, stop, and chat history that survives a reload.
-- **Light and dark themes.** White and near-black, with blue for actions and green for text that comes from your documents. It follows your system until you press the sun/moon button, and then remembers your choice. Motion is switched off if your system asks for reduced motion.
+- **Light and dark themes.** A grainy charcoal page (or pale grey in light) with one paper card for the chat, plain type with a single serif word, and scribbles around the numbers. Blue marks what's interactive and green marks text that comes from your documents. It follows your system until you press the sun/moon button, and then remembers your choice. Motion is switched off if your system asks for reduced motion.
 - **Three providers.** OpenAI, Claude (Anthropic) and Ollama, switchable in the app without losing your keys. Installed Ollama models can be picked from a dropdown.
 
 ## Slash commands

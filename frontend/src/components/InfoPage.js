@@ -67,7 +67,7 @@ function InfoPage() {
   return (
     <div className="docs-page">
       <section className="docs-hero">
-        <h1>what is athena?</h1>
+        <h1>what is <em className="serif">athena</em>?</h1>
         <p>
           Athena is an agent harness. Give it your PDFs and a question, and it decides which
           tools to use: searching your documents and the web, doing math, running Python, or

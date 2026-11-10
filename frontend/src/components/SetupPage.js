@@ -12,7 +12,7 @@ function SetupPage({ apiKeyStatus, onOpenApiKey, onNewChat }) {
   return (
     <div className="docs-page">
       <section className="docs-hero">
-        <h1>setup guide</h1>
+        <h1>setup <em className="serif">guide</em></h1>
         <p>get your AI provider connected, then create your first chat.</p>
       </section>
 

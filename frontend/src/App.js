@@ -6,6 +6,8 @@ import UploadDropzone from './components/UploadDropzone';
 import UploadQueue from './components/UploadQueue';
 import MessageList from './components/MessageList';
 import ChatInput from './components/ChatInput';
+import Terminal from './components/Terminal';
+import { readTerminalOpen, saveTerminalOpen } from './terminal';
 import DocumentLibraryModal from './components/DocumentLibraryModal';
 import DocumentViewerModal from './components/DocumentViewerModal';
 import NewChatModal from './components/NewChatModal';
@@ -83,6 +85,7 @@ function App() {
   const [showSearch, setShowSearch] = useState(false);
   const [searchFocus, setSearchFocus] = useState(null);   // {chatId, index}: a message to scroll to once its chat is showing
   const [showAgent, setShowAgent] = useState(false);
+  const [showTerminal, setShowTerminal] = useState(readTerminalOpen);
   const [showMerge, setShowMerge] = useState(false);
   const [chatConfig, setChatConfig] = useState(null);
   const [contextUsageByChat, setContextUsageByChat] = useState({});
@@ -259,11 +262,16 @@ function App() {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setShowSearch(true);
+      } else if (e.ctrlKey && e.key === '`') {
+        e.preventDefault();
+        setShowTerminal((open) => !open);
       }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
   }, []);
+
+  useEffect(() => { saveTerminalOpen(showTerminal); }, [showTerminal]);
 
   const handleCreateChat = async (name, copyFrom) => {
     const response = await axios.post(`${API_BASE}/chats`, { name, copy_from: copyFrom || null });
@@ -1011,7 +1019,7 @@ function App() {
           <div className="empty-state-icon">
             <UploadCloudIcon size={22} />
           </div>
-          <h2>create your first chat</h2>
+          <h2>create your <em className="serif">first</em> chat</h2>
           <p>each chat has its own set of documents. start one empty, or copy an existing chat's documents.</p>
           <button className="nav-item primary-action" onClick={() => setShowNewChatModal(true)}>
             new chat
@@ -1022,7 +1030,7 @@ function App() {
           <div className="empty-state-icon">
             <UploadCloudIcon size={22} />
           </div>
-          <h2>upload documents to begin</h2>
+          <h2>upload <em className="serif">documents</em> to begin</h2>
           <p>add one or more pdfs and athena will index them for grounded, cited answers.</p>
           <UploadDropzone onFiles={handleFileUpload} disabled={loading} />
           <UploadQueue
@@ -1061,6 +1069,7 @@ function App() {
             onEdit={() => redoLastExchange('edit')}
             onBranch={loading ? undefined : (index) => handleBranch(activeChatId, index)}
           />
+          {showTerminal && <Terminal messages={messages} onClose={() => setShowTerminal(false)} />}
           <ChatInput
             input={input}
             setInput={setInput}
@@ -1100,6 +1109,8 @@ function App() {
           onOpenSearch={() => setShowSearch(true)}
           contextUsage={contextUsageByChat[activeChatId]}
           onOpenAgent={() => setShowAgent(true)}
+          terminalOpen={showTerminal}
+          onToggleTerminal={() => setShowTerminal((open) => !open)}
           onOpenApiKey={() => setShowApiKeyModal(true)}
           apiKeyStatus={apiKeyStatus}
           view={view}
