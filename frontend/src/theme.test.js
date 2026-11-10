@@ -1,6 +1,6 @@
-// Guards the palette: every text colour must stay readable (WCAG AA) on the
-// surfaces it can appear on, in both themes, and the hues must keep the
-// relationships the design is built on.
+// Guards the palette: white, near-black, blue and green. Every text colour must stay readable
+// (WCAG AA) on the surfaces it can appear on, in both themes, and the hues must stay what the
+// design says they are.
 
 const fs = require('fs');
 const path = require('path');
@@ -14,9 +14,10 @@ function parseTokens(block) {
 }
 
 const lightBlock = css.match(/:root\s*{([^}]*)}/)[1];
-const darkBlock = css.match(/@media \(prefers-color-scheme: dark\)\s*{\s*:root\s*{([^}]*)}/)[1];
+const darkMediaBlock = css.match(/@media \(prefers-color-scheme: dark\)\s*{\s*:root:not\(\[data-theme="light"\]\)\s*{([^}]*)}/)[1];
+const darkAttributeBlock = css.match(/:root\[data-theme="dark"\]\s*{([^}]*)}/)[1];
 const light = parseTokens(lightBlock);
-const dark = { ...light, ...parseTokens(darkBlock) };
+const dark = { ...light, ...parseTokens(darkAttributeBlock) };
 const themes = { light, dark };
 
 const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
@@ -31,30 +32,28 @@ function contrast(a, b) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-function hue(hex) {
+function hsl(hex) {
   const [r, g, b] = rgb(hex);
   const max = Math.max(r, g, b);
   const min = Math.min(r, g, b);
   const d = max - min;
-  if (d === 0) return 0;
-  let h;
-  if (max === r) h = ((g - b) / d) % 6;
-  else if (max === g) h = (b - r) / d + 2;
-  else h = (r - g) / d + 4;
-  return (h * 60 + 360) % 360;
+  const l = (max + min) / 2;
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  let h = 0;
+  if (d !== 0) {
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+  }
+  return { h: (h * 60 + 360) % 360, s, l };
 }
 
-const hueGap = (a, b) => {
-  const gap = Math.abs(hue(a) - hue(b)) % 360;
-  return Math.min(gap, 360 - gap);
-};
-
 describe.each(Object.entries(themes))('%s theme', (name, t) => {
-  const surfaces = { ground: '--color-bg', card: '--surface' };
+  const surfaces = { canvas: '--canvas', tile: '--surface', 'recessed area': '--bg-sunken' };
 
   test('every colour used as text or fill is a plain hex value', () => {
-    ['--color-bg', '--surface', '--ink-1', '--ink-2', '--ink-3', '--blue', '--blue-strong', '--orange',
-      '--orange-text', '--green', '--green-text', '--red', '--brown', '--on-blue', '--on-orange', '--on-red']
+    ['--color-bg', '--canvas', '--bg-sunken', '--surface', '--ink-1', '--ink-2', '--ink-3', '--blue', '--blue-strong',
+      '--green', '--green-text', '--red', '--on-blue', '--on-red']
       .forEach((token) => expect(t[token]).toMatch(/^#[0-9a-fA-F]{6}$/));
   });
 
@@ -65,45 +64,76 @@ describe.each(Object.entries(themes))('%s theme', (name, t) => {
       expect(contrast(t['--ink-1'], surface)).toBeGreaterThanOrEqual(7);
     });
 
-    test.each(['--ink-2', '--ink-3', '--blue', '--blue-strong', '--orange-text', '--green-text', '--red'])(
+    test.each(['--ink-2', '--ink-3', '--blue', '--blue-strong', '--green-text', '--red'])(
       '%s meets AA (4.5:1)', (token) => {
         expect(contrast(t[token], surface)).toBeGreaterThanOrEqual(4.5);
       });
+
+    test.each(['--blue', '--green'])('%s as an icon or dot is visible (3:1)', (token) => {
+      expect(contrast(t[token], surface)).toBeGreaterThanOrEqual(3);
+    });
   });
 
-  test.each([['--on-blue', '--blue'], ['--on-orange', '--orange'], ['--on-red', '--red']])(
+  test.each([['--on-blue', '--blue'], ['--on-red', '--red'], ['--color-bg', '--ink-1']])(
     'text on a solid fill: %s on %s meets AA', (on, fill) => {
       expect(contrast(t[on], t[fill])).toBeGreaterThanOrEqual(4.5);
     });
 
-  test('the content card is distinct from the ground it sits on', () => {
-    expect(contrast(t['--surface'], t['--color-bg'])).toBeGreaterThan(1.05);
+  test('the tiles stand out from the canvas they sit on', () => {
+    expect(contrast(t['--surface'], t['--canvas'])).toBeGreaterThan(1.05);
+  });
+
+  test('recessed areas inside a tile are distinct from the tile', () => {
+    expect(contrast(t['--bg-sunken'], t['--surface'])).toBeGreaterThan(1.02);
   });
 });
 
-describe('colour relationships', () => {
-  test.each(Object.entries(themes))('%s: orange is blue\'s complement (roughly opposite on the wheel)', (name, t) => {
-    expect(hueGap(t['--blue'], t['--orange'])).toBeGreaterThan(150);
-  });
-
-  test.each(Object.entries(themes))('%s: green is analogous to blue (neighbouring hues)', (name, t) => {
-    expect(hueGap(t['--blue'], t['--green'])).toBeGreaterThan(30);
-    expect(hueGap(t['--blue'], t['--green'])).toBeLessThan(90);
-  });
-
-  test('the light neutrals are warm - beige and brown, close to orange', () => {
-    ['--color-bg', '--surface', '--ink-2', '--ink-3', '--brown'].forEach((token) => {
-      expect(hueGap(light[token], light['--orange'])).toBeLessThan(30);
+describe('the palette', () => {
+  test.each(Object.entries(themes))('%s: blue is blue and green is green', (name, t) => {
+    ['--blue', '--blue-strong'].forEach((token) => {
+      const { h } = hsl(t[token]);
+      expect(h).toBeGreaterThan(205);
+      expect(h).toBeLessThan(250);
+    });
+    ['--green', '--green-text'].forEach((token) => {
+      const { h } = hsl(t[token]);
+      expect(h).toBeGreaterThan(130);
+      expect(h).toBeLessThan(165);
     });
   });
 
-  test('the dark ground is a deep blue, in the blue family', () => {
-    expect(hueGap(dark['--color-bg'], dark['--blue'])).toBeLessThan(30);
-    expect(luminance(dark['--color-bg'])).toBeLessThan(0.02);
+  test.each(Object.entries(themes))('%s: red is only for failure, and is a true red', (name, t) => {
+    const { h } = hsl(t['--red']);
+    expect(h < 12 || h > 350).toBe(true);
   });
 
-  test('the light text colour is a deep blue-slate, the complement of the warm ground', () => {
-    expect(hueGap(light['--ink-1'], light['--blue'])).toBeLessThan(25);
+  test.each(Object.entries(themes))('%s: blue and green are clearly different hues', (name, t) => {
+    expect(Math.abs(hsl(t['--blue']).h - hsl(t['--green']).h)).toBeGreaterThan(70);
+  });
+
+  test.each(Object.entries(themes))('%s: the neutrals are nearly colourless', (name, t) => {
+    ['--color-bg', '--canvas', '--bg-sunken', '--surface', '--ink-1', '--ink-2', '--ink-3'].forEach((token) => {
+      expect(hsl(t[token]).s).toBeLessThan(0.2);
+    });
+  });
+
+  test('light is white with near-black ink', () => {
+    expect(light['--color-bg'].toUpperCase()).toBe('#FFFFFF');
+    expect(luminance(light['--ink-1'])).toBeLessThan(0.01);
+  });
+
+  test('dark is near-black with near-white ink', () => {
+    expect(luminance(dark['--color-bg'])).toBeLessThan(0.01);
+    expect(luminance(dark['--ink-1'])).toBeGreaterThan(0.85);
+  });
+
+  test('there is no fifth colour: every saturated token is blue, green or red', () => {
+    const family = (h) => ((h >= 130 && h < 165) ? 'green' : (h >= 205 && h < 250) ? 'blue' : (h < 12 || h > 350) ? 'red' : 'other');
+    const strangers = Object.entries(light)
+      .filter(([, value]) => /^#[0-9a-f]{6}$/i.test(value))
+      .filter(([, value]) => hsl(value).s > 0.25 && family(hsl(value).h) === 'other')
+      .map(([token]) => token);
+    expect(strangers).toEqual([]);
   });
 });
 
@@ -116,17 +146,25 @@ describe('the stylesheet', () => {
   });
 
   test('the dark theme only overrides tokens the light theme defines', () => {
-    const extra = Object.keys(parseTokens(darkBlock)).filter((name) => !(name in light));
+    const extra = Object.keys(parseTokens(darkAttributeBlock)).filter((name) => !(name in light));
     expect(extra).toEqual([]);
   });
 
+  test('the dark theme chosen with the toggle matches the one that follows the system', () => {
+    expect(parseTokens(darkAttributeBlock)).toEqual(parseTokens(darkMediaBlock));
+  });
+
   test('both themes define the same colours', () => {
-    const darkOnly = Object.keys(parseTokens(darkBlock));
-    ['--color-bg', '--surface', '--ink-1', '--ink-2', '--ink-3', '--blue', '--orange', '--green', '--red',
-      '--on-blue', '--on-orange', '--on-red'].forEach((token) => expect(darkOnly).toContain(token));
+    const darkOnly = Object.keys(parseTokens(darkAttributeBlock));
+    ['--color-bg', '--canvas', '--bg-sunken', '--surface', '--ink-1', '--ink-2', '--ink-3', '--blue', '--green', '--red',
+      '--on-blue', '--on-red'].forEach((token) => expect(darkOnly).toContain(token));
   });
 
   test('motion is switched off for people who prefer reduced motion', () => {
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[^}]*{[^}]*animation: none/);
+  });
+
+  test('no animation steps: motion is eased, never blocky', () => {
+    expect(css).not.toMatch(/steps\(/);
   });
 });

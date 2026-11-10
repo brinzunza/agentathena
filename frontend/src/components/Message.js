@@ -3,7 +3,6 @@ import { ChevronRightIcon, FileTextIcon } from './Icons';
 import AgentSteps from './AgentSteps';
 import ResearchCard from './ResearchCard';
 import Markdown from './Markdown';
-import PixelOverlay from './PixelOverlay';
 
 // Error codes (from the backend) that the API key settings can fix
 const SETTINGS_ERROR_CODES = new Set(['no_credits', 'invalid_key', 'ollama_unreachable']);
@@ -29,27 +28,30 @@ function CopyButton({ text }) {
 
 function Message({
   chatId, message, expanded, onToggleSources, onViewSource, onOpenSettings, onDecidePermission,
-  isLastReply, canRedo, onRegenerate, onEdit, onBranch, pixel
+  isLastReply, canRedo, onRegenerate, onEdit, onBranch, reveal
 }) {
   const sources = message.sources || [];
 
   if (message.role === 'error') {
     return (
-      <div className="message error" role="alert">
+      <div className={`message error ${reveal ? 'message-reveal' : ''}`} role="alert" onAnimationEnd={reveal?.onDone}>
         <div className="message-content">
-          {pixel && <PixelOverlay preset="note" onDone={pixel.onDone} />}
           <div className="error-label">error</div>
           {message.content}
-          {onOpenSettings && SETTINGS_ERROR_CODES.has(message.code) && (
-            <button type="button" className="error-action" onClick={onOpenSettings}>
-              open provider settings
-            </button>
-          )}
-          {isLastReply && canRedo && (
-            <button type="button" className="error-action" onClick={onRegenerate}>
-              try again
-            </button>
-          )}
+          {(onOpenSettings && SETTINGS_ERROR_CODES.has(message.code)) || (isLastReply && canRedo) ? (
+            <div className="error-actions">
+              {onOpenSettings && SETTINGS_ERROR_CODES.has(message.code) && (
+                <button type="button" className="error-action" onClick={onOpenSettings}>
+                  open provider settings
+                </button>
+              )}
+              {isLastReply && canRedo && (
+                <button type="button" className="error-action" onClick={onRegenerate}>
+                  try again
+                </button>
+              )}
+            </div>
+          ) : null}
         </div>
       </div>
     );
@@ -57,11 +59,8 @@ function Message({
 
   if (message.role === 'research') {
     return (
-      <div className="message research">
-        <div className="pixel-host">
-          <ResearchCard chatId={chatId} researchId={message.research_id} topic={message.topic} />
-          {pixel && <PixelOverlay preset="card" onDone={pixel.onDone} />}
-        </div>
+      <div className={`message research ${reveal ? 'message-reveal' : ''}`} onAnimationEnd={reveal?.onDone}>
+        <ResearchCard chatId={chatId} researchId={message.research_id} topic={message.topic} />
       </div>
     );
   }
@@ -69,24 +68,20 @@ function Message({
   const steps = message.role === 'assistant' ? message.steps || [] : [];
   const hasContent = message.content || !message.streaming || steps.length === 0;
   const finished = message.role === 'assistant' && !message.streaming && message.content;
-  // Your prompt sweeps in from the right, a reply dissolves in from pixels, notes quietly
-  const revealPreset = message.role === 'user' ? 'prompt' : message.role === 'assistant' ? 'response' : 'note';
+  // A new message eases in: your prompt from the right, a reply once it has started to arrive
+  const reveals = reveal && (message.role !== 'assistant' || Boolean(message.content) || !message.streaming);
 
   return (
-    <div className={`message ${message.role}`}>
+    <div
+      className={`message ${message.role} ${reveals ? 'message-reveal' : ''}`}
+      onAnimationEnd={reveals ? reveal.onDone : undefined}
+    >
       {steps.length > 0 && (
         <AgentSteps steps={steps} streaming={!!message.streaming} onDecide={onDecidePermission} />
       )}
       {message.notice && <div className="message-notice">{message.notice}</div>}
       {hasContent && <div className={`message-content ${message.streaming ? 'streaming' : ''}`}>
         {message.role === 'assistant' ? <Markdown>{message.content}</Markdown> : message.content}
-        {pixel && (
-          <PixelOverlay
-            preset={revealPreset}
-            play={message.role !== 'assistant' || Boolean(message.content) || !message.streaming}
-            onDone={pixel.onDone}
-          />
-        )}
         {message.response_time != null && (
           <div className="response-time">{message.response_time.toFixed(2)}s</div>
         )}

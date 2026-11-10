@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import PixelOverlay from './PixelOverlay';
+import { MoonIcon, SunIcon } from './Icons';
 import { buildChatTree } from '../branches';
 
 function Sidebar({
@@ -23,6 +23,8 @@ function Sidebar({
   view,
   onOpenInfo,
   onOpenSetup,
+  theme,
+  onToggleTheme,
   loading,
   dbStatus,
   chatsLoaded
@@ -70,7 +72,7 @@ function Sidebar({
       <button className="confirm-cancel" onClick={() => setConfirming(null)}>no</button>
     </span>
   ) : (
-    <button onClick={() => setConfirming(key)} className="nav-item" disabled={loading}>
+    <button onClick={() => setConfirming(key)} className="nav-item nav-item-danger" disabled={loading}>
       {label}
     </button>
   ));
@@ -78,15 +80,21 @@ function Sidebar({
   return (
     <div className="sidebar">
       <div className="sidebar-brand">
-        <svg className="sidebar-brand-mark" viewBox="0 0 5 5" aria-hidden="true" shapeRendering="crispEdges">
-          <rect x="2" y="0" width="1" height="1" className="brand-pixel-accent" />
-          <rect x="1" y="1" width="1" height="1" />
-          <rect x="3" y="1" width="1" height="1" />
-          <rect x="0" y="2" width="1" height="3" />
-          <rect x="4" y="2" width="1" height="3" />
-          <rect x="1" y="3" width="3" height="1" />
+        <svg className="sidebar-brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+          <rect width="24" height="24" rx="7" className="brand-tile" />
+          <path d="M7.25 17.25 12 6.75l4.75 10.5M9.1 13.4h5.8" className="brand-glyph" />
+          <circle cx="12" cy="6.75" r="1.35" className="brand-dot" />
         </svg>
-        athena
+        <span className="sidebar-brand-name">athena</span>
+        <button
+          type="button"
+          className="theme-toggle"
+          onClick={onToggleTheme}
+          aria-label={theme === 'dark' ? 'switch to the light theme' : 'switch to the dark theme'}
+          title={theme === 'dark' ? 'light theme' : 'dark theme'}
+        >
+          <span className="theme-toggle-icon" key={theme}>{theme === 'dark' ? <SunIcon /> : <MoonIcon />}</span>
+        </button>
       </div>
 
       <div className="sidebar-section">
@@ -96,14 +104,14 @@ function Sidebar({
             <div
               key={chat.id}
               className={`chat-list-item ${chat.id === activeChatId ? 'active' : ''} ${depth > 0 ? 'chat-list-branch' : ''}`}
-              style={depth > 0 ? { marginRight: Math.min(depth, 4) * 12 } : undefined}
+              style={depth > 0 ? { marginLeft: Math.min(depth, 4) * 14 } : undefined}
               onClick={() => onSwitchChat(chat.id)}
               title={chat.name}
+              {...(knownChats.current && !knownChats.current.has(chat.id)
+                ? { 'data-new': '', onAnimationEnd: () => knownChats.current.add(chat.id) }
+                : {})}
             >
               <span className="chat-list-name">{chat.name}</span>
-              {knownChats.current && !knownChats.current.has(chat.id) && (
-                <PixelOverlay preset="listItem" ground="--color-bg" onDone={() => knownChats.current.add(chat.id)} />
-              )}
             </div>
           ))}
         </div>

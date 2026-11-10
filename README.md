@@ -29,6 +29,7 @@ A 1½-minute walkthrough: upload a PDF, ask about it, and watch the agent use to
 - **Memory you control.** The context the model sees is stored per chat, editable, and sized by a token budget. Edit it from the context screen or with slash commands.
 - **Background research.** `/research <topic>` plans sub-questions, investigates each with your documents and the web, and writes a report you can download as Markdown. It keeps running if you leave the chat.
 - **Chat niceties.** Markdown rendering (tables, code, lists), copy, regenerate and edit-last-message, stop, and chat history that survives a reload.
+- **Light and dark themes.** White and near-black, with blue for actions and green for text that comes from your documents. It follows your system until you press the sun/moon button, and then remembers your choice. Motion is switched off if your system asks for reduced motion.
 - **Three providers.** OpenAI, Claude (Anthropic) and Ollama, switchable in the app without losing your keys. Installed Ollama models can be picked from a dropdown.
 
 ## Slash commands

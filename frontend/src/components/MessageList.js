@@ -4,7 +4,7 @@ import Message from './Message';
 // How close to the bottom still counts as "following along"
 const STICK_THRESHOLD_PX = 80;
 
-// Which messages have already played their pixel reveal, per chat, so
+// Which messages have already played their entrance, per chat, so
 // switching away and back doesn't replay them.
 const played = {};
 const playedIn = (chatId) => (played[chatId] = played[chatId] || new Set());
@@ -97,7 +97,7 @@ function MessageList({
             onRegenerate={onRegenerate}
             onEdit={onEdit}
             onBranch={onBranch ? () => onBranch(index) : undefined}
-            pixel={index >= animateFrom && !playedIn(chatId).has(index)
+            reveal={index >= animateFrom && !playedIn(chatId).has(index)
               ? { onDone: () => playedIn(chatId).add(index) }
               : null}
           />

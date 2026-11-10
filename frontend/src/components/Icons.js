@@ -100,3 +100,16 @@ export const CompassIcon = () => (
     <path d="M10.3 5.7 9 9l-3.3 1.3L7 7l3.3-1.3Z" />
   </svg>
 );
+
+export const SunIcon = () => (
+  <svg {...base}>
+    <circle cx="8" cy="8" r="2.75" />
+    <path d="M8 1.75v1.5M8 12.75v1.5M1.75 8h1.5M12.75 8h1.5M3.6 3.6l1.05 1.05M11.35 11.35l1.05 1.05M3.6 12.4l1.05-1.05M11.35 4.65l1.05-1.05" />
+  </svg>
+);
+
+export const MoonIcon = () => (
+  <svg {...base}>
+    <path d="M13.25 9.4A5.5 5.5 0 0 1 6.6 2.75a5.5 5.5 0 1 0 6.65 6.65Z" />
+  </svg>
+);

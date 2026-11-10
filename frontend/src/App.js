@@ -21,7 +21,7 @@ import { BRANCH_USAGE, CONTEXT_USAGE, RESEARCH_USAGE, parseBranchCommand, parseC
 import { canRedoLast, rewindLastExchange } from './chatHistory';
 import { UploadInterrupted, isAbort, uploadFiles } from './uploader';
 import { createUploadApi, sha256Hex, waitForOnline } from './uploadApi';
-import PixelTransition from './components/PixelTransition';
+import { applyTheme, effectiveTheme, readSavedTheme, saveTheme, systemPrefersDark, toggledTheme } from './theme';
 
 export const API_BASE = process.env.NODE_ENV === 'production' ? '' : 'http://localhost:8000';
 
@@ -87,9 +87,10 @@ function App() {
   const [chatConfig, setChatConfig] = useState(null);
   const [contextUsageByChat, setContextUsageByChat] = useState({});
   const [unfinishedByChat, setUnfinishedByChat] = useState({});
-  // How the main view transitions the next time the chat changes: a plain dissolve to switch, a bigger sweep to create
-  const [transitionPreset, setTransitionPreset] = useState('switch');
-  // How many messages a chat had when it loaded; only later ones play the pixel reveal
+  // The explicit light / dark choice, or null to follow the system
+  const [savedTheme, setSavedTheme] = useState(readSavedTheme);
+  const [systemDark, setSystemDark] = useState(systemPrefersDark);
+  // How many messages a chat had when it loaded; only later ones animate in
   const baselineRef = useRef({});
   const [apiKeyStatus, setApiKeyStatus] = useState(null);
   const [view, setView] = useState('chat'); // 'chat' | 'info' | 'setup'
@@ -242,7 +243,6 @@ function App() {
     setShowMerge(false);
     setViewingSource(null);
     setView('chat');
-    setTransitionPreset('switch');
     checkStatuses(chatId);
     loadMessages(chatId);
   };
@@ -270,7 +270,6 @@ function App() {
     const newChat = response.data;
     setChats(prev => [...prev, newChat]);
     switchChat(newChat.id);
-    setTransitionPreset('create');
     setShowNewChatModal(false);
   };
 
@@ -300,7 +299,6 @@ function App() {
       const { data } = await axios.post(`${API_BASE}/chats/${chatId}/branch`, { name: name || null, at_index: atIndex });
       setChats(prev => [...prev, data]);
       switchChat(data.id);
-      setTransitionPreset('create');
     } catch (error) {
       addNote(chatId, 'error', readApiError(error).message);
     }
@@ -980,6 +978,22 @@ function App() {
   const unfinished = (unfinishedByChat[activeChatId] || []).filter(item => !handledIds.has(item.upload_id));
 
   const agentEnabled = !!chatConfig?.agent_enabled;
+
+  // Follow the system's light / dark setting until the user picks one
+  useEffect(() => {
+    const query = window.matchMedia?.('(prefers-color-scheme: dark)');
+    if (!query) return undefined;
+    const onChange = (e) => setSystemDark(e.matches);
+    query.addEventListener?.('change', onChange);
+    return () => query.removeEventListener?.('change', onChange);
+  }, []);
+
+  const toggleTheme = () => {
+    const next = toggledTheme(savedTheme, systemDark);
+    setSavedTheme(next);
+    saveTheme(next);
+    applyTheme(next);
+  };
   const activeChat = chats.find(c => c.id === activeChatId);
   const parentChat = activeChat?.parent_id ? chats.find(c => c.id === activeChat.parent_id) : null;
   const canChat = !!activeChatId && (dbStatus.exists || agentEnabled);
@@ -1058,7 +1072,7 @@ function App() {
           />
           {loading && !messages[messages.length - 1]?.streaming && (
             <div className="loading">
-              <span className="pixel-loader" aria-hidden="true"><i /><i /><i /></span>
+              <span className="typing-dots" aria-hidden="true"><i /><i /><i /></span>
               working
             </div>
           )}
@@ -1091,6 +1105,8 @@ function App() {
           view={view}
           onOpenInfo={() => setView('info')}
           onOpenSetup={() => setView('setup')}
+          theme={effectiveTheme(savedTheme, systemDark)}
+          onToggleTheme={toggleTheme}
           loading={loading}
           dbStatus={dbStatus}
           chatsLoaded={chatsLoaded}
@@ -1161,18 +1177,20 @@ function App() {
         )}
 
         <div className="main">
-          <PixelTransition triggerKey={`${view}:${activeChatId}`} preset={transitionPreset} />
-          {view === 'info' ? (
-            <InfoPage />
-          ) : view === 'setup' ? (
-            <SetupPage
-              apiKeyStatus={apiKeyStatus}
-              onOpenApiKey={() => setShowApiKeyModal(true)}
-              onNewChat={() => setShowNewChatModal(true)}
-            />
-          ) : (
-            renderChatView()
-          )}
+          {/* Remounting on a change of chat or page replays the view's entrance */}
+          <div className={`main-view ${view === 'chat' ? 'main-view-chat' : 'main-view-page'}`} key={`${view}:${activeChatId}`}>
+            {view === 'info' ? (
+              <InfoPage />
+            ) : view === 'setup' ? (
+              <SetupPage
+                apiKeyStatus={apiKeyStatus}
+                onOpenApiKey={() => setShowApiKeyModal(true)}
+                onNewChat={() => setShowNewChatModal(true)}
+              />
+            ) : (
+              renderChatView()
+            )}
+          </div>
         </div>
       </div>
     </div>
