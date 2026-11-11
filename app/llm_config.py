@@ -210,7 +210,7 @@ def set_ollama_model(name: str) -> None:
     """
     models = list_ollama_models()
     if models is None:
-        raise ValueError("can't reach Ollama. start it first")
+        raise ValueError("can't reach Ollama. press run ollama on the ai provider screen first")
     if name not in {m["name"] for m in models}:
         raise ValueError(f"{name!r} isn't installed in Ollama. run: ollama pull {name}")
     _write_env_value("OLLAMA_MODEL", name)

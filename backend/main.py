@@ -24,6 +24,7 @@ import agent_tools
 import research
 import uploads
 import processing_status as pstatus
+import ollama_runner
 from agent import run_agent
 import llm_config
 
@@ -208,7 +209,7 @@ def classify_llm_error(error: Exception):
         return "invalid_key", (f"{provider} rejected the API key. update it in settings, or switch to another "
                                "provider (or local Ollama).")
     if "failed to connect to ollama" in lowered or "connection refused" in lowered:
-        return "ollama_unreachable", "can't reach Ollama. start it, or add an API key in settings."
+        return "ollama_unreachable", ("can't reach Ollama. open ai provider and press run ollama, or add an API key.")
     return "error", text
 
 def describe_llm_error(error: Exception) -> str:
@@ -403,6 +404,15 @@ async def get_ollama_models():
         "models": models or [],
         "selected": llm_config.get_providers_status()["ollama"]["model"],
     }
+
+@app.post("/settings/ollama/start")
+def start_ollama():
+    """
+    Start Ollama (the Mac app if installed, else `ollama serve`) and wait for it to answer.
+    Always answers 200 with {running, started, code, message}: failing to start is a result to show, not a server error.
+    """
+    return ollama_runner.start()
+
 
 @app.post("/settings/ollama-model")
 async def set_ollama_model(request: SetOllamaModelRequest):

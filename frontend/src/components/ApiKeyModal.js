@@ -16,6 +16,15 @@ function ApiKeyModal({ onClose, onChanged }) {
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
   const [ollamaModels, setOllamaModels] = useState([]);
+  const [ollamaRunning, setOllamaRunning] = useState(null);   // null until we know
+
+  const loadOllama = async () => {
+    try {
+      const response = await axios.get(`${API_BASE}/settings/ollama-models`);
+      setOllamaModels(response.data.models);
+      setOllamaRunning(response.data.reachable);
+    } catch (err) { /* the picker just stays hidden */ }
+  };
 
   useEffect(() => {
     (async () => {
@@ -25,10 +34,7 @@ function ApiKeyModal({ onClose, onChanged }) {
       } catch (err) {
         setError('failed to load api key status');
       }
-      try {
-        const response = await axios.get(`${API_BASE}/settings/ollama-models`);
-        setOllamaModels(response.data.models);
-      } catch (err) { /* the picker just stays hidden */ }
+      await loadOllama();
       setLoading(false);
     })();
   }, []);
@@ -77,6 +83,25 @@ function ApiKeyModal({ onClose, onChanged }) {
   const chooseOllamaModel = (model) => run(`model-${model}`,
     () => axios.post(`${API_BASE}/settings/ollama-model`, { model }),
     'failed to switch model');
+
+  // Ollama is a separate program that isn't started with this app; this starts it and waits until it answers
+  const runOllama = async () => {
+    setBusy('ollama-start');
+    setError(null);
+    try {
+      const { data } = await axios.post(`${API_BASE}/settings/ollama/start`);
+      if (data.running) {
+        await loadOllama();
+        onChanged();
+      } else {
+        setOllamaRunning(false);
+        setError(data.message);
+      }
+    } catch (err) {
+      setError("couldn't reach the backend to start ollama");
+    }
+    setBusy(null);
+  };
 
   const active = status?.provider_id;
 
@@ -182,6 +207,18 @@ function ApiKeyModal({ onClose, onChanged }) {
                   </button>
                 )}
               </div>
+
+              {ollamaRunning !== null && (
+                <div className="provider-key ollama-state">
+                  <span className={`status-dot ${ollamaRunning ? 'active' : ''}`} />
+                  {ollamaRunning ? 'ollama is running' : "ollama isn't running"}
+                  {!ollamaRunning && (
+                    <button type="button" className="provider-use" disabled={!!busy} onClick={runOllama}>
+                      {busy === 'ollama-start' ? 'starting...' : 'run ollama'}
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

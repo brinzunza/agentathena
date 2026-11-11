@@ -25,7 +25,7 @@ A document-grounded AI agent. Upload PDFs, ask questions about them, and let the
 - **Terminal.** A read-only console under the chat (`terminal` in the sidebar, or ctrl + `) that logs what the agent does as it does it: each tool call, the Python it ran, and what came back. It runs nothing itself.
 - **Chat niceties.** Markdown rendering (tables, code, lists), copy, regenerate and edit-last-message, stop, and chat history that survives a reload.
 - **Light and dark themes.** A grainy charcoal page (or pale grey in light) with one paper card for the chat, plain type with a single serif word, and scribbles around the numbers. Blue marks what's interactive and green marks text that comes from your documents. It follows your system until you press the sun/moon button, and then remembers your choice. Motion is switched off if your system asks for reduced motion.
-- **Three providers.** OpenAI, Claude (Anthropic) and Ollama, switchable in the app without losing your keys. Installed Ollama models can be picked from a dropdown.
+- **Three providers.** OpenAI, Claude (Anthropic) and Ollama, switchable in the app without losing your keys. Installed Ollama models can be picked from a dropdown. Ollama isn't started with the app, so if it isn't running the **ai provider** screen shows a **run ollama** button that starts it (the Mac app if installed, otherwise `ollama serve`) and waits until it answers.
 
 ## Slash commands
 
