@@ -187,11 +187,18 @@ def classify_llm_error(error: Exception):
     """
     Sort an LLM provider failure into a code the UI can act on, plus a
     plain-language message. Codes: no_credits, invalid_key,
-    ollama_unreachable, error (anything else, with the raw text).
+    ollama_unreachable, missing_package, error (anything else, with the raw text).
     """
     text = str(error)
     lowered = text.lower()
     provider = llm_config.get_model_info()["provider"]
+    if isinstance(error, ImportError) or "no module named" in lowered:
+        # Not a provider problem: the Python running the backend lacks a package (typically an old
+        # virtual environment). "No module named 'x'" alone doesn't say which Python or what to do.
+        package = getattr(error, "name", None) or (text.split("'")[1] if text.count("'") >= 2 else "a package")
+        return "missing_package", (f"the Python running this app doesn't have {package} installed ({sys.executable}). "
+                                   f"install it with: {sys.executable} -m pip install -r backend/requirements.txt, "
+                                   "then restart the app.")
     if ("insufficient_quota" in lowered or "no credits" in lowered or "exceeded your current quota" in lowered
             or "credit balance is too low" in lowered):
         return "no_credits", (f"your {provider} account has no credits left. add credits, or switch to another "

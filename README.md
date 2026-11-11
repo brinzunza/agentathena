@@ -98,6 +98,8 @@ Create a chat, drop in a PDF, and ask a question. Pick your provider and model u
 ```
 This builds the web app once (and again whenever the interface changes), then serves it and the API together at http://127.0.0.1:8000. It needs no Node process, which is about 600 MB less memory than the development servers. Use `PORT=8001 ./start_app.sh` to pick another port.
 
+**Which Python it uses.** `backend_env/` if it has every package the backend imports, otherwise your system `python3`. A virtual environment from before a dependency was added is skipped, with a note saying what it lacks. `python3 backend/env_check.py` shows what any Python is missing, and `python3 -m pip install -r backend/requirements.txt` fixes it. The desktop app makes the same choice, but an app opened from Finder doesn't see your shell's `PATH` (there, `python3` is a macOS stub with no packages), so it asks your login shell which `python3` it would run, then tries every installed Python.framework version and Homebrew.
+
 ## Desktop app (macOS)
 
 A small native window (about 3 MB) around the same backend, with its own icon. It needs [Rust](https://rustup.rs):
