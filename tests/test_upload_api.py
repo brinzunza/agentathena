@@ -199,3 +199,17 @@ def test_the_original_upload_route_no_longer_trusts_the_clients_filename(client,
     assert os.listdir(files_dir) == ["evil.pdf"]
     assert not os.path.exists(os.path.join(os.path.dirname(files_dir), "evil.pdf"))
     assert client.post(f"/chats/{api_chat}/documents/upload", files={"files": ("notes.txt", b"hi", "text/plain")}).status_code == 400
+
+
+def test_starting_to_process_clears_out_old_finished_jobs(client, api_chat, processed):
+    import processing_status
+    main.upload_progress.clear()
+    main.upload_progress["ancient"] = {"chat_id": "x", "status": processing_status.COMPLETED, "finished_at": 0}
+    main.upload_progress["recent"] = {"chat_id": "x", "status": processing_status.COMPLETED,
+                                      "finished_at": __import__("time").time()}
+    response, data = begin(client, api_chat)
+    session = response.json()
+    put(client, api_chat, session["upload_id"], 0, data)
+    assert client.post(f"/chats/{api_chat}/uploads/process", json={"upload_ids": [session["upload_id"]]}).status_code == 200
+    assert "ancient" not in main.upload_progress and "recent" in main.upload_progress
+    main.upload_progress.clear()

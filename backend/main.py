@@ -23,6 +23,7 @@ import branches
 import agent_tools
 import research
 import uploads
+import processing_status as pstatus
 from agent import run_agent
 import llm_config
 
@@ -97,7 +98,7 @@ class ProcessUploadsRequest(BaseModel):
 
 class UploadProgress(BaseModel):
     upload_id: str
-    status: str  # 'uploading', 'converting', 'indexing', 'completed', 'error'
+    status: str  # one of processing_status.ALL
     progress: int  # 0-100
     message: str
     current_file: Optional[str] = None
@@ -172,7 +173,7 @@ def in_progress_upload_chat_ids():
     """Chat ids with an upload currently converting/indexing/uploading"""
     return {
         v["chat_id"] for v in upload_progress.values()
-        if v.get("chat_id") and v["status"] not in ("completed", "error")
+        if v.get("chat_id") and pstatus.is_active(v)
     }
 
 def resolve_chat_paths(chat_id: str):
@@ -209,13 +210,14 @@ def describe_llm_error(error: Exception) -> str:
 
 def process_documents_background(upload_id: str, file_paths: List[str], chroma_db_path: str, files_path: str):
     """Background task to process uploaded documents"""
+    stage = pstatus.CONVERTING
     try:
         total_files = len(file_paths)
         print(f"\n=== BACKGROUND PROCESSING START (ID: {upload_id}) ===")
 
         # Stage 1: Convert PDFs to markdown
         upload_progress[upload_id].update({
-            "status": "converting",
+            "status": pstatus.CONVERTING,
             "progress": 10,
             "message": "converting PDFs to markdown",
             "current_file": None,
@@ -239,8 +241,9 @@ def process_documents_background(upload_id: str, file_paths: List[str], chroma_d
         print(f"PDF conversion completed in {conversion_time:.3f}s")
 
         # Stage 2: Build vector database
+        stage = pstatus.INDEXING
         upload_progress[upload_id].update({
-            "status": "indexing",
+            "status": pstatus.INDEXING,
             "progress": 50,
             "message": "building vector database",
             "current_file": None,
@@ -250,7 +253,7 @@ def process_documents_background(upload_id: str, file_paths: List[str], chroma_d
         def indexing_progress(current_chunk, total_chunks, file_name):
             pct = int((current_chunk / total_chunks) * 40) if total_chunks else 0
             upload_progress[upload_id].update({
-                "status": "indexing",
+                "status": pstatus.INDEXING,
                 "progress": 50 + pct,
                 "message": f"summarizing chunk {current_chunk}/{total_chunks}",
                 "current_file": file_name,
@@ -264,8 +267,9 @@ def process_documents_background(upload_id: str, file_paths: List[str], chroma_d
         print(f"Vector database updated in {db_time:.3f}s")
 
         # Stage 3: Cleanup - delete PDF files to save storage
+        stage = pstatus.CLEANUP
         upload_progress[upload_id].update({
-            "status": "cleanup",
+            "status": pstatus.CLEANUP,
             "progress": 90,
             "message": "cleaning up temporary files",
             "current_file": None,
@@ -290,25 +294,26 @@ def process_documents_background(upload_id: str, file_paths: List[str], chroma_d
 
         # Complete
         upload_progress[upload_id].update({
-            "status": "completed",
+            "status": pstatus.COMPLETED,
             "progress": 100,
             "message": f"successfully processed {total_files} files",
             "current_file": None,
             "processed_files": total_files
         })
+        pstatus.finish(upload_progress[upload_id])
 
         print(f"=== BACKGROUND PROCESSING COMPLETE (ID: {upload_id}) ===\n")
 
     except Exception as e:
         print(f"ERROR in background processing: {str(e)}")
         traceback.print_exc()
+        # Keep how far it got, and say which stage failed
         upload_progress[upload_id].update({
-            "status": "error",
-            "progress": 0,
-            "message": f"processing failed: {str(e)}",
+            "status": pstatus.ERROR,
+            "message": pstatus.failure_message(stage, e),
             "current_file": None,
-            "processed_files": 0
         })
+        pstatus.finish(upload_progress[upload_id])
 
 
 # API Routes
@@ -708,9 +713,10 @@ async def upload_documents(chat_id: str, background_tasks: BackgroundTasks, file
         print(f"Upload ID: {upload_id}")
 
         # Initialize progress tracking
+        pstatus.prune(upload_progress)
         upload_progress[upload_id] = {
             "chat_id": chat_id,
-            "status": "uploading",
+            "status": pstatus.UPLOADING,
             "progress": 0,
             "message": "receiving files",
             "current_file": None,
@@ -813,9 +819,10 @@ def process_uploads(chat_id: str, request: ProcessUploadsRequest, background_tas
         raise upload_http_error(e)
 
     upload_id = str(uuid.uuid4())
+    pstatus.prune(upload_progress)
     upload_progress[upload_id] = {
         "chat_id": chat_id,
-        "status": "converting",
+        "status": pstatus.CONVERTING,
         "progress": 10,
         "message": "queued for processing",
         "current_file": None,
@@ -875,6 +882,28 @@ def discard_stale_uploads():
             print(f"Removed {removed} stale upload session(s)")
     except Exception as e:
         print(f"WARNING: stale upload cleanup failed: {e}")
+
+
+@app.on_event("startup")
+def discard_unfinished_branches():
+    """A branch that was still being copied when the backend last stopped is incomplete: remove it"""
+    try:
+        removed = chat_manager.discard_unfinished_chats()
+        if removed:
+            print(f"Removed {removed} unfinished branch(es)")
+    except Exception as e:
+        print(f"WARNING: unfinished branch cleanup failed: {e}")
+
+
+@app.on_event("startup")
+def settle_interrupted_research():
+    """Research that was running when the backend last stopped can't still be running: record that"""
+    try:
+        settled = research.recover_interrupted()
+        if settled:
+            print(f"Marked {settled} interrupted research job(s)")
+    except Exception as e:
+        print(f"WARNING: research recovery failed: {e}")
 
 
 @app.get("/documents/upload/status/{upload_id}")

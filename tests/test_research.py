@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 
 import chat_manager
@@ -142,7 +143,60 @@ def test_a_running_job_with_no_live_thread_is_reported_interrupted(chat_id, job)
     research._save(chat_id, job)    # status "running", but nothing is running it
     result = research.get_job(chat_id, job["id"])
     assert result["status"] == "interrupted" and "restarted" in result["error"]
-    assert research.get_job(chat_id, job["id"])["status"] == "interrupted"    # and it's saved that way
+    assert research.get_job(chat_id, job["id"])["status"] == "interrupted"
+
+
+def test_reading_a_job_never_writes_it(chat_id, job):
+    research._save(chat_id, job)
+    path = research._job_path(chat_id, job["id"])
+    before = open(path).read()
+    research.get_job(chat_id, job["id"])
+    research.has_running_job(chat_id)
+    assert open(path).read() == before        # still "running" on disk: only startup settles it
+
+
+def test_startup_settles_jobs_left_running_by_the_last_run(chat_id, job):
+    research._save(chat_id, job)
+    assert research.recover_interrupted() == 1
+    saved = json.load(open(research._job_path(chat_id, job["id"])))
+    assert saved["status"] == "interrupted" and "restarted" in saved["error"] and saved["finished_at"]
+    assert research.recover_interrupted() == 0       # nothing left to settle
+
+
+def test_startup_leaves_a_job_that_is_alive_alone(chat_id, job):
+    research._save(chat_id, job)
+    research._active[job["id"]] = threading.Event()
+    try:
+        assert research.recover_interrupted() == 0
+        assert json.load(open(research._job_path(chat_id, job["id"])))["status"] == "running"
+    finally:
+        research._active.pop(job["id"], None)
+
+
+def test_startup_skips_finished_jobs_and_unreadable_files(chat_id, job):
+    research._save(chat_id, {**job, "status": "done"})
+    with open(os.path.join(research._research_dir(chat_id), "broken.json"), "w") as f:
+        f.write("{not json")
+    assert research.recover_interrupted() == 0
+
+
+def test_cancelling_while_the_report_is_written_is_honoured(chat_id, job, monkeypatch):
+    cancel = threading.Event()
+
+    class SlowWriter:
+        def invoke(self, _):
+            cancel.set()                      # the user cancels while the model is writing
+            return "A REPORT NOBODY WANTS"
+
+    monkeypatch.setattr(research, "get_research_planner", lambda: Chain("1. First sub-question"))
+    monkeypatch.setattr(research, "get_research_writer", lambda: SlowWriter())
+    monkeypatch.setattr(research, "agent_loop", scripted_loop("note"))
+    research._save(chat_id, job)
+    research._active[job["id"]] = cancel
+    research._run(chat_id, job, cancel, classify)
+    result = research.get_job(chat_id, job["id"])
+    assert result["status"] == "cancelled" and result["report"] == ""
+    assert chat_manager.get_context(chat_id) == []        # and nothing was remembered of it
 
 
 def test_job_ids_are_validated_before_touching_the_filesystem(chat_id):

@@ -418,3 +418,59 @@ def test_the_api_renames_a_chat(client, parent):
     response = client.patch(f"/chats/{parent}", json={"name": "renamed"})
     assert response.status_code == 200 and response.json()["name"] == "renamed"
     assert client.patch(f"/chats/{parent}", json={"name": " "}).status_code == 400
+
+
+# --- a branch that is still being built ---
+
+def test_a_branch_is_hidden_while_it_is_being_copied(parent, monkeypatch):
+    seen = {}
+    real = branches._copy_research
+
+    def peek(parent_id, branch_id, kept):
+        listed = [chat["id"] for chat in chat_manager.list_chats()]
+        seen["listed"] = branch_id in listed
+        seen["searchable"] = any(r["chat_id"] == branch_id for r in chat_manager.search_chats("branch"))
+        seen["exists"] = chat_manager.chat_exists(branch_id)
+        seen["marked"] = chat_manager.get_meta(branch_id).get("building")
+        return real(parent_id, branch_id, kept)
+
+    monkeypatch.setattr(branches, "_copy_research", peek)
+    meta = branches.create_branch(parent, "side question")
+    assert seen == {"listed": False, "searchable": False, "exists": True, "marked": True}
+    # and once it is finished it is an ordinary chat
+    assert meta["id"] in [chat["id"] for chat in chat_manager.list_chats()]
+    assert "building" not in meta and "building" not in chat_manager.get_meta(meta["id"])
+    assert any(r["chat_id"] == meta["id"] for r in chat_manager.search_chats("side question"))
+
+
+def test_a_branch_that_fails_midway_is_removed_and_never_listed(parent, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(branches, "_copy_research", boom)
+    before = [chat["id"] for chat in chat_manager.list_chats()]
+    with pytest.raises(RuntimeError):
+        branches.create_branch(parent, "doomed")
+    assert [chat["id"] for chat in chat_manager.list_chats()] == before
+    assert sorted(os.listdir(chat_manager.CHATS_ROOT)) == sorted(before)      # no folder left behind
+
+
+def test_startup_discards_a_branch_a_crash_left_unfinished(parent):
+    survivor = branches.create_branch(parent, "complete one")
+    crashed = chat_manager.create_chat("half", copy_from=parent, parent_id=parent, branch_point=2, building=True)
+    assert chat_manager.discard_unfinished_chats() == 1
+    assert not chat_manager.chat_exists(crashed["id"])
+    assert chat_manager.chat_exists(survivor["id"]) and chat_manager.chat_exists(parent)
+    assert chat_manager.discard_unfinished_chats() == 0
+
+
+def test_a_chat_that_is_not_marked_is_never_discarded_at_startup(chat_id):
+    assert chat_manager.discard_unfinished_chats() == 0
+    assert chat_manager.chat_exists(chat_id)
+
+
+def test_finish_building_is_idempotent(parent):
+    crashed = chat_manager.create_chat("half", parent_id=parent, branch_point=0, building=True)
+    assert chat_manager.finish_building(crashed["id"]).get("building") is None
+    assert chat_manager.finish_building(crashed["id"]).get("building") is None
+    assert crashed["id"] in [chat["id"] for chat in chat_manager.list_chats()]

@@ -80,7 +80,7 @@ def create_branch(parent_id: str, name: Optional[str] = None, at_index: Optional
 
     meta = chat_manager.create_chat(
         name, copy_from=parent_id, in_progress_upload_chat_ids=in_progress_upload_chat_ids,
-        parent_id=parent_id, branch_point=keep,
+        parent_id=parent_id, branch_point=keep, building=True,
     )
     branch_id = meta["id"]
     try:
@@ -99,9 +99,12 @@ def create_branch(parent_id: str, name: Optional[str] = None, at_index: Optional
             shutil.copytree(workspace, os.path.join(chat_manager._chat_dir(branch_id), "workspace"),
                             ignore=shutil.ignore_patterns("_athena_*"))
         _copy_research(parent_id, branch_id, kept)
+        # Only now does it count as a chat: until here it is hidden, and a crash leaves one to be discarded
+        chat_manager.finish_building(branch_id)
     except Exception:
         shutil.rmtree(chat_manager._chat_dir(branch_id), ignore_errors=True)
         raise
+    meta.pop("building", None)
     return meta
 
 

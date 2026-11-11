@@ -25,6 +25,11 @@ from llm_prompts import _chat_llm, agent_system_prompt, agent_tool_hints
 from qa_workflow import get_sources_metadata
 
 RESULT_PREVIEW_CHARS = 700
+
+# How a tool call can end. The browser has a table with these same names (frontend/src/steps.js,
+# which also knows 'running' and 'stopped', two states only it can see); a test keeps them in step.
+STEP_OK, STEP_ERROR, STEP_DENIED, STEP_SKIPPED = "ok", "error", "denied", "skipped"
+STEP_STATUSES = (STEP_OK, STEP_ERROR, STEP_DENIED, STEP_SKIPPED)
 DOCUMENT_TOOLS = frozenset({"search_documents", "read_document", "list_documents"})
 MAX_PERMISSION_CODE_CHARS = 6000
 
@@ -310,15 +315,15 @@ def agent_loop(messages: list, toolbox: ToolBox, max_steps: int, include_context
             turn_text = ""
 
             signature = (name, json.dumps(args, sort_keys=True, default=str))
-            status = "ok"
+            status = STEP_OK
             if name in ("web_search", "fetch_url") and docs_exist and not docs_searched:
                 result, status = ("skipped: the user has uploaded documents. search them first with search_documents; "
-                                  "use the web only if they don't have the answer."), "skipped"
+                                  "use the web only if they don't have the answer."), STEP_SKIPPED
             elif name not in tools_by_name:
-                result, status = f"error: there is no tool called {name!r}", "error"
+                result, status = f"error: there is no tool called {name!r}", STEP_ERROR
             elif signature in previous_calls:
                 result, status = ("error: you already made this exact call. use the earlier result, "
-                                  "try different arguments, or answer now."), "error"
+                                  "try different arguments, or answer now."), STEP_ERROR
             else:
                 previous_calls.add(signature)
                 docs_searched = docs_searched or name in ("search_documents", "read_document")
@@ -331,14 +336,14 @@ def agent_loop(messages: list, toolbox: ToolBox, max_steps: int, include_context
                 if not approved:
                     result, status = ("the user did not allow this code to run. do not retry it and do not guess. carry on with your other tools "
                                    "(search_documents or read_document for anything about their documents), or say what "
-                                   "you could not do."), "denied"
+                                   "you could not do."), STEP_DENIED
                 else:
                     try:
                         result = str(tools_by_name[name].invoke(args))
                         if result.startswith("error:"):
-                            status = "error"
+                            status = STEP_ERROR
                     except Exception as e:
-                        result, status = f"error: {e}", "error"
+                        result, status = f"error: {e}", STEP_ERROR
 
             yield {"type": "step_result", "id": step_id, "status": status,
                    "result": result[:RESULT_PREVIEW_CHARS] + ("…" if len(result) > RESULT_PREVIEW_CHARS else "")}
@@ -415,7 +420,7 @@ def run_agent(chat_id: str, question: str, history: List[Tuple[str, str]], confi
 
     for number, (doc_name, doc_text) in enumerate(preread, 1):
         yield {"type": "step", "id": number, "tool": "read_document", "args": {"name": doc_name}, "thought": ""}
-        yield {"type": "step_result", "id": number, "status": "ok", "result": doc_text[:RESULT_PREVIEW_CHARS]}
+        yield {"type": "step_result", "id": number, "status": STEP_OK, "result": doc_text[:RESULT_PREVIEW_CHARS]}
     if preread:
         # The text goes in the user's own message, which a small model reads as the
         # thing to answer from; as a made-up tool exchange the 8B model narrated it

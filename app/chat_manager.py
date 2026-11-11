@@ -139,6 +139,8 @@ def list_chats() -> List[dict]:
             continue
         with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
+        if meta.get("building"):
+            continue          # a branch still being copied: not a chat yet
         chroma_db_path, files_path = get_chat_paths(entry)
         meta["document_count"] = len(list_documents(chroma_db_path, files_path))
         meta.setdefault("parent_id", None)
@@ -182,9 +184,11 @@ def search_chats(query: str, limit: int = 50, per_chat: int = 5) -> List[dict]:
     for entry in os.listdir(CHATS_ROOT):
         try:
             with open(_meta_path(entry), "r", encoding="utf-8") as f:
-                chats.append(json.load(f))
+                meta = json.load(f)
         except (OSError, ValueError):
             continue
+        if not meta.get("building"):
+            chats.append(meta)
     chats.sort(key=lambda chat: chat["created_at"], reverse=True)
 
     results = []
@@ -215,7 +219,7 @@ def search_chats(query: str, limit: int = 50, per_chat: int = 5) -> List[dict]:
 
 
 def create_chat(name: str, copy_from: Optional[str] = None, in_progress_upload_chat_ids: Optional[set] = None,
-                parent_id: Optional[str] = None, branch_point: Optional[int] = None) -> dict:
+                parent_id: Optional[str] = None, branch_point: Optional[int] = None, building: bool = False) -> dict:
     """
     Create a new chat, either empty or as a copy of another chat's documents.
 
@@ -233,6 +237,9 @@ def create_chat(name: str, copy_from: Optional[str] = None, in_progress_upload_c
         parent_id, branch_point: set when the chat is a branch of another
             (see branches.create_branch): the chat it came from, and how many
             of that chat's messages it started with
+        building: mark the chat as still being put together. It is left out of
+            list_chats() until finish_building() clears the mark, and
+            discard_unfinished_chats() removes one a crash left behind
 
     Returns:
         The new chat's metadata dict (matches list_chats()'s shape)
@@ -267,6 +274,8 @@ def create_chat(name: str, copy_from: Optional[str] = None, in_progress_upload_c
     if parent_id is not None:
         meta["parent_id"] = parent_id
         meta["branch_point"] = branch_point
+    if building:
+        meta["building"] = True
     with open(_meta_path(chat_id), "w", encoding="utf-8") as f:
         json.dump(meta, f)
 
@@ -291,6 +300,37 @@ def get_meta(chat_id: str) -> dict:
     meta.setdefault("parent_id", None)
     meta.setdefault("branch_point", None)
     return meta
+
+
+def finish_building(chat_id: str) -> dict:
+    """Clear a chat's 'still being built' mark, so it shows up in the list. Returns its metadata."""
+    with _meta_lock:
+        meta = get_meta(chat_id)
+        if meta.pop("building", None):
+            _write_json_atomic(_meta_path(chat_id), meta)
+        return meta
+
+
+def discard_unfinished_chats() -> int:
+    """
+    Delete chats still marked as being built. Meant for startup, when nothing can be mid-copy:
+    one that is left was cut short by a crash or a killed process. Returns how many were removed.
+    """
+    if not os.path.exists(CHATS_ROOT):
+        return 0
+    removed = 0
+    for entry in os.listdir(CHATS_ROOT):
+        if not os.path.exists(_meta_path(entry)):
+            continue
+        try:
+            with open(_meta_path(entry), "r", encoding="utf-8") as f:
+                unfinished = json.load(f).get("building")
+        except (OSError, ValueError):
+            continue
+        if unfinished:
+            shutil.rmtree(_chat_dir(entry), ignore_errors=True)
+            removed += 1
+    return removed
 
 
 def update_meta(chat_id: str, **fields) -> dict:

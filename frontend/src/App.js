@@ -8,6 +8,9 @@ import MessageList from './components/MessageList';
 import ChatInput from './components/ChatInput';
 import Terminal from './components/Terminal';
 import { readTerminalOpen, saveTerminalOpen } from './terminal';
+import { applyStepResult, settleStep } from './steps';
+import { openModal, closeModal, afterSearchShortcut } from './modals';
+import { UPLOADING, INTERRUPTED, CONVERTING, COMPLETED, ERROR, pollFailureOutcome } from './uploadStatus';
 import DocumentLibraryModal from './components/DocumentLibraryModal';
 import DocumentViewerModal from './components/DocumentViewerModal';
 import NewChatModal from './components/NewChatModal';
@@ -51,15 +54,7 @@ function readApiError(error) {
 // (cancelled, or the page was left); store them as stopped so a reload
 // doesn't show them working forever.
 function settleSteps(message) {
-  if (!message.steps) return message;
-  return {
-    ...message,
-    steps: message.steps.map((step) => ({
-      ...step,
-      status: step.status === 'running' ? 'stopped' : step.status,
-      permission: step.permission?.state === 'pending' ? { ...step.permission, state: 'expired' } : step.permission,
-    })),
-  };
+  return message.steps ? { ...message, steps: message.steps.map(settleStep) } : message;
 }
 
 function App() {
@@ -77,16 +72,20 @@ function App() {
   const [expandedSourcesByChat, setExpandedSourcesByChat] = useState({});
 
   const [input, setInput] = useState('');
-  const [showLibrary, setShowLibrary] = useState(false);
-  const [viewingSource, setViewingSource] = useState(null);
-  const [showNewChatModal, setShowNewChatModal] = useState(false);
-  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
-  const [showContext, setShowContext] = useState(false);
-  const [showSearch, setShowSearch] = useState(false);
+  // Which dialog is open: at most one, see modals.js
+  const [modal, setModal] = useState(null);
+  const open = (name, payload) => setModal(openModal(name, payload));
+  const close = (...names) => setModal((current) => closeModal(current, names));
+  const showLibrary = modal?.name === 'library';
+  const showNewChatModal = modal?.name === 'newChat';
+  const showApiKeyModal = modal?.name === 'apiKey';
+  const showContext = modal?.name === 'context';
+  const showSearch = modal?.name === 'search';
+  const showAgent = modal?.name === 'agent';
+  const showMerge = modal?.name === 'merge';
+  const viewingSource = modal?.name === 'source' ? modal.payload : null;
   const [searchFocus, setSearchFocus] = useState(null);   // {chatId, index}: a message to scroll to once its chat is showing
-  const [showAgent, setShowAgent] = useState(false);
   const [showTerminal, setShowTerminal] = useState(readTerminalOpen);
-  const [showMerge, setShowMerge] = useState(false);
   const [chatConfig, setChatConfig] = useState(null);
   const [contextUsageByChat, setContextUsageByChat] = useState({});
   const [unfinishedByChat, setUnfinishedByChat] = useState({});
@@ -102,6 +101,7 @@ function App() {
   // Uploads in progress, by job id: { chatId, files, controller, uploadIds } - the files stay here so an interrupted upload can resume
   const uploadJobsRef = useRef({});
   const abortControllersRef = useRef({});
+  const pollFailuresRef = useRef({});     // failed progress checks in a row, by processing job
   const loadedMessagesRef = useRef(new Set());
 
   const messages = messagesByChat[activeChatId] || EMPTY_MESSAGES;
@@ -241,10 +241,7 @@ function App() {
 
   const switchChat = (chatId) => {
     setActiveChatId(chatId);
-    setShowLibrary(false);
-    setShowContext(false);
-    setShowMerge(false);
-    setViewingSource(null);
+    close('library', 'context', 'merge', 'source');
     setView('chat');
     checkStatuses(chatId);
     loadMessages(chatId);
@@ -252,7 +249,7 @@ function App() {
 
   // Opening a search hit: the chat, and the matching message when the hit was one
   const openSearchResult = (result) => {
-    setShowSearch(false);
+    close('search');
     if (result.chat_id !== activeChatId || view !== 'chat') switchChat(result.chat_id);
     setSearchFocus(result.index === null ? null : { chatId: result.chat_id, index: result.index });
   };
@@ -261,7 +258,7 @@ function App() {
     const onKeyDown = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
-        setShowSearch(true);
+        setModal(afterSearchShortcut);
       } else if (e.ctrlKey && e.key === '`') {
         e.preventDefault();
         setShowTerminal((open) => !open);
@@ -278,7 +275,7 @@ function App() {
     const newChat = response.data;
     setChats(prev => [...prev, newChat]);
     switchChat(newChat.id);
-    setShowNewChatModal(false);
+    close('newChat');
   };
 
   // Drops everything the page remembers about a chat that no longer exists
@@ -334,7 +331,7 @@ function App() {
     setMessagesByChat(prev => ({ ...prev, [parentId]: data.messages }));
     if (data.deleted) forgetChat(branchId);
 
-    setShowMerge(false);
+    close('merge');
     await refreshChats();
     switchChat(parentId);
     refreshContextUsage(parentId);
@@ -381,7 +378,8 @@ function App() {
           : upload
       ));
 
-      if (status.status === 'completed') {
+      pollFailuresRef.current[uploadId] = 0;
+      if (status.status === COMPLETED) {
         if (uploadIntervalsRef.current[uploadId]) {
           clearInterval(uploadIntervalsRef.current[uploadId]);
           delete uploadIntervalsRef.current[uploadId];
@@ -400,7 +398,7 @@ function App() {
         setTimeout(() => {
           updateUploadQueue(chatId, prev => prev.filter(u => u.uploadId !== uploadId));
         }, 3000);
-      } else if (status.status === 'error') {
+      } else if (status.status === ERROR) {
         if (uploadIntervalsRef.current[uploadId]) {
           clearInterval(uploadIntervalsRef.current[uploadId]);
           delete uploadIntervalsRef.current[uploadId];
@@ -420,10 +418,18 @@ function App() {
       }
     } catch (error) {
       console.error('failed to poll upload status:', error);
+      const failures = (pollFailuresRef.current[uploadId] || 0) + 1;
+      pollFailuresRef.current[uploadId] = failures;
+      const { giveUp, message } = pollFailureOutcome(error, failures);
+      if (!giveUp) return;      // a dropped connection: the next tick asks again
+
       if (uploadIntervalsRef.current[uploadId]) {
         clearInterval(uploadIntervalsRef.current[uploadId]);
         delete uploadIntervalsRef.current[uploadId];
       }
+      delete pollFailuresRef.current[uploadId];
+      // Say so: the row used to just vanish, which looked like success
+      postUploadError(chatId, message);
       setTimeout(() => {
         updateUploadQueue(chatId, prev => prev.filter(u => u.uploadId !== uploadId));
       }, 3000);
@@ -467,7 +473,7 @@ function App() {
     ));
     const api = createUploadApi(API_BASE, chatId);
     let lastPercent = 0;
-    patch({ status: 'uploading', message: 'uploading', error: null });
+    patch({ status: UPLOADING, message: 'uploading', error: null });
 
     try {
       const uploadIds = await uploadFiles(job.files, {
@@ -480,7 +486,7 @@ function App() {
         onProgress: (p) => {
           lastPercent = p.total ? Math.floor((p.loaded * 100) / p.total) : 0;
           patch({
-            status: 'uploading',
+            status: UPLOADING,
             progress: lastPercent,
             bytesLoaded: p.loaded,
             bytesTotal: p.total,
@@ -497,7 +503,7 @@ function App() {
       delete uploadJobsRef.current[jobId];
       updateUploadQueue(chatId, prev => prev.map(upload =>
         upload.uploadId === jobId
-          ? { ...upload, uploadId: batchId, status: 'converting', progress: 0, message: 'queued for processing',
+          ? { ...upload, uploadId: batchId, status: CONVERTING, progress: 0, message: 'queued for processing',
               currentFile: null, processedFiles: 0 }
           : upload
       ));
@@ -512,7 +518,7 @@ function App() {
       const recoverable = error instanceof UploadInterrupted || [404, 409, undefined].includes(error.status);
       if (recoverable && uploadJobsRef.current[jobId]) {
         patch({
-          status: 'interrupted',
+          status: INTERRUPTED,
           message: `upload interrupted at ${lastPercent}%`,
           error: error.message,
         });
@@ -551,7 +557,7 @@ function App() {
     updateUploadQueue(chatId, prev => [...prev, {
       uploadId: jobId,
       progress: 0,
-      status: 'uploading',
+      status: UPLOADING,
       message: 'uploading',
       currentFile: null,
       totalFiles: fresh.length,
@@ -599,7 +605,7 @@ function App() {
   // outcome comes back as a system message.
   const runContextCommand = async (chatId, command, rawInput) => {
     if (command.type === 'open') {
-      setShowContext(true);
+      open('context');
       setInput('');
       return;
     }
@@ -719,7 +725,7 @@ function App() {
       if (branchCommand.type === 'branch') {
         await handleBranch(chatId, null, branchCommand.name);
       } else if (chats.find(c => c.id === chatId)?.parent_id) {
-        setShowMerge(true);
+        open('merge');
       } else {
         addNote(chatId, 'system', `this chat isn't a branch, so there is nothing to merge into. ${BRANCH_USAGE}`);
       }
@@ -803,7 +809,10 @@ function App() {
             }],
           }));
         } else if (data.type === 'step_result') {
-          patchStep(data.id, { status: data.status, result: data.result });
+          patchReply(message => ({
+            ...message,
+            steps: (message.steps || []).map(step => (step.id === data.id ? applyStepResult(step, data) : step)),
+          }));
         } else if (data.type === 'permission_request') {
           patchStep(data.step, { permission: { id: data.id, code: data.code, state: 'pending' } });
         } else if (data.type === 'notice') {
@@ -1021,7 +1030,7 @@ function App() {
           </div>
           <h2>create your <em className="serif">first</em> chat</h2>
           <p>each chat has its own set of documents. start one empty, or copy an existing chat's documents.</p>
-          <button className="nav-item primary-action" onClick={() => setShowNewChatModal(true)}>
+          <button className="nav-item primary-action" onClick={() => open('newChat')}>
             new chat
           </button>
         </div>
@@ -1059,8 +1068,8 @@ function App() {
             messages={messages}
             expandedSources={expandedSources}
             onToggleSources={toggleSources}
-            onViewSource={setViewingSource}
-            onOpenSettings={() => setShowApiKeyModal(true)}
+            onViewSource={(source) => open('source', source)}
+            onOpenSettings={() => open('apiKey')}
             animateFrom={baselineRef.current[activeChatId] ?? Infinity}
             focus={searchFocus?.chatId === activeChatId ? searchFocus : null}
             onFocusDone={() => setSearchFocus(null)}
@@ -1097,21 +1106,21 @@ function App() {
           chats={chats}
           activeChatId={activeChatId}
           onSwitchChat={switchChat}
-          onNewChat={() => setShowNewChatModal(true)}
+          onNewChat={() => open('newChat')}
           onDeleteChat={handleDeleteChat}
           onBranch={() => handleBranch(activeChatId)}
-          onOpenMerge={() => setShowMerge(true)}
+          onOpenMerge={() => open('merge')}
           onRename={handleRename}
           onClearChat={clearChat}
           onResetDatabase={resetDatabase}
-          onOpenLibrary={() => setShowLibrary(true)}
-          onOpenContext={() => setShowContext(true)}
-          onOpenSearch={() => setShowSearch(true)}
+          onOpenLibrary={() => open('library')}
+          onOpenContext={() => open('context')}
+          onOpenSearch={() => open('search')}
           contextUsage={contextUsageByChat[activeChatId]}
-          onOpenAgent={() => setShowAgent(true)}
+          onOpenAgent={() => open('agent')}
           terminalOpen={showTerminal}
           onToggleTerminal={() => setShowTerminal((open) => !open)}
-          onOpenApiKey={() => setShowApiKeyModal(true)}
+          onOpenApiKey={() => open('apiKey')}
           apiKeyStatus={apiKeyStatus}
           view={view}
           onOpenInfo={() => setView('info')}
@@ -1127,21 +1136,21 @@ function App() {
           <NewChatModal
             chats={chats}
             onCreate={handleCreateChat}
-            onClose={() => setShowNewChatModal(false)}
+            onClose={() => close('newChat')}
           />
         )}
 
         {showApiKeyModal && (
           <ApiKeyModal
             onChanged={refreshApiKeyStatus}
-            onClose={() => setShowApiKeyModal(false)}
+            onClose={() => close('apiKey')}
           />
         )}
 
         {showLibrary && activeChatId && (
           <DocumentLibraryModal
             chatId={activeChatId}
-            onClose={() => setShowLibrary(false)}
+            onClose={() => close('library')}
             onDocumentDeleted={() => { checkStatuses(activeChatId); refreshChats(); }}
           />
         )}
@@ -1150,7 +1159,7 @@ function App() {
           <AgentModal
             chatId={activeChatId}
             onChanged={setChatConfig}
-            onClose={() => setShowAgent(false)}
+            onClose={() => close('agent')}
           />
         )}
 
@@ -1161,19 +1170,19 @@ function App() {
             messages={messages}
             parentBusy={!!loadingByChat[parentChat.id]}
             onMerge={handleMerge}
-            onClose={() => setShowMerge(false)}
+            onClose={() => close('merge')}
           />
         )}
 
         {showSearch && (
-          <SearchModal onClose={() => setShowSearch(false)} onOpen={openSearchResult} />
+          <SearchModal onClose={() => close('search')} onOpen={openSearchResult} />
         )}
 
         {showContext && activeChatId && (
           <ContextModal
             chatId={activeChatId}
             onChanged={() => refreshContextUsage(activeChatId)}
-            onClose={() => setShowContext(false)}
+            onClose={() => close('context')}
           />
         )}
 
@@ -1183,7 +1192,7 @@ function App() {
             name={viewingSource.name}
             startIndex={viewingSource.start_index}
             length={viewingSource.length}
-            onClose={() => setViewingSource(null)}
+            onClose={() => close('source')}
           />
         )}
 
@@ -1195,8 +1204,8 @@ function App() {
             ) : view === 'setup' ? (
               <SetupPage
                 apiKeyStatus={apiKeyStatus}
-                onOpenApiKey={() => setShowApiKeyModal(true)}
-                onNewChat={() => setShowNewChatModal(true)}
+                onOpenApiKey={() => open('apiKey')}
+                onNewChat={() => open('newChat')}
               />
             ) : (
               renderChatView()

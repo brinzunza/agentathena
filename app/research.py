@@ -44,8 +44,18 @@ def _save(chat_id: str, job: dict) -> None:
     chat_manager._write_json_atomic(_job_path(chat_id, job["id"]), job)
 
 
+INTERRUPTED_MESSAGE = "the backend restarted while this research was running"
+
+
+def _mark_interrupted(job: dict) -> dict:
+    return {**job, "status": "interrupted", "error": INTERRUPTED_MESSAGE}
+
+
 def get_job(chat_id: str, job_id: str) -> Optional[dict]:
-    """A job's current state, or None. A 'running' job with no live thread (backend restarted) is marked interrupted."""
+    """
+    A job's current state, or None. Reading never writes: a 'running' job with no live thread
+    (the backend restarted) is reported as interrupted, and recover_interrupted() saves that at startup.
+    """
     if not chat_manager.chat_exists(chat_id) or not re.fullmatch(r"[0-9a-f]{12}", job_id):
         return None
     path = _job_path(chat_id, job_id)
@@ -55,11 +65,37 @@ def get_job(chat_id: str, job_id: str) -> Optional[dict]:
         job = json.load(f)
     with _active_lock:
         alive = job_id in _active
-    if job["status"] == "running" and not alive:
-        job["status"] = "interrupted"
-        job["error"] = "the backend restarted while this research was running"
-        _save(chat_id, job)
-    return job
+    return _mark_interrupted(job) if job["status"] == "running" and not alive else job
+
+
+def recover_interrupted() -> int:
+    """
+    Settle every research job left 'running' by a previous run of the backend: save it as interrupted.
+    Called once at startup, when no job can be running yet. Returns how many were settled.
+    """
+    if not os.path.isdir(chat_manager.CHATS_ROOT):
+        return 0
+    settled = 0
+    for chat_id in os.listdir(chat_manager.CHATS_ROOT):
+        directory = _research_dir(chat_id)
+        if not os.path.isdir(directory):
+            continue
+        for name in os.listdir(directory):
+            if not name.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(directory, name), "r", encoding="utf-8") as f:
+                    job = json.load(f)
+                with _active_lock:
+                    alive = job.get("id") in _active
+                if job.get("status") == "running" and not alive:
+                    job = _mark_interrupted(job)
+                    job["finished_at"] = datetime.now().isoformat()
+                    _save(chat_id, job)
+                    settled += 1
+            except (OSError, ValueError, KeyError) as e:
+                print(f"WARNING: could not check research job {name}: {e}")
+    return settled
 
 
 def has_running_job(chat_id: str) -> bool:
@@ -194,12 +230,17 @@ def _run(chat_id: str, job: dict, cancel: threading.Event, classify_error: Calla
                     raise
                 print(f"research report failed, retrying once: {e}")
                 report = writer.invoke({"topic": job["topic"], "notes": notes_text})
-            job["report"] = (report or "").strip()
-            job["status"] = "done"
-            try:
-                context_manager.record_turn(chat_id, f"/research {job['topic']}", job["report"])
-            except Exception as e:
-                print(f"WARNING: failed to record research in context: {e}")
+            if cancel.is_set():
+                # Cancelled while the report was being written: that call can't be interrupted, but
+                # its result is dropped, so cancel means the same thing in every phase
+                job["status"] = "cancelled"
+            else:
+                job["report"] = (report or "").strip()
+                job["status"] = "done"
+                try:
+                    context_manager.record_turn(chat_id, f"/research {job['topic']}", job["report"])
+                except Exception as e:
+                    print(f"WARNING: failed to record research in context: {e}")
     except Exception as e:
         print(f"ERROR in research job {job['id']}: {e}")
         job["status"] = "error"

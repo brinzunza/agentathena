@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ChevronRightIcon } from './Icons';
+import { statusLabel } from '../steps';
 
 const TOOL_LABELS = {
   search_documents: 'searched documents',
@@ -13,15 +14,6 @@ const TOOL_LABELS = {
   compact_context: 'compacted context',
   keep_only_context: 'narrowed context',
   remember: 'remembered',
-};
-
-const STATUS_MARK = {
-  running: 'working…',
-  ok: 'done',
-  error: 'failed',
-  denied: 'not allowed',
-  stopped: 'stopped',
-  skipped: 'redirected',
 };
 
 function clip(text, limit) {
@@ -89,7 +81,7 @@ function AgentSteps({ steps, streaming, onDecide }) {
               <div className="step-head">
                 <span className="step-tool">{TOOL_LABELS[step.tool] || step.tool}</span>
                 <span className="step-arg">{summarize(step)}</span>
-                <span className="step-status">{STATUS_MARK[step.status] || step.status}</span>
+                <span className="step-status">{statusLabel(step.status)}</span>
               </div>
               {step.tool === 'run_python' && !step.permission && step.args?.code && (
                 <pre className="step-code">{step.args.code}</pre>

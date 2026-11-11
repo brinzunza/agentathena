@@ -2,15 +2,9 @@ import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import Markdown from './Markdown';
 import { API_BASE } from '../App';
+import { researchLabel } from '../researchStatus';
 
 const POLL_MS = 2000;
-const PHASE_LABEL = { planning: 'planning', researching: 'researching', writing: 'writing the report' };
-const ENDED_LABEL = {
-  done: 'finished',
-  cancelled: 'cancelled',
-  error: 'failed',
-  interrupted: 'interrupted',
-};
 
 // The report as a Markdown file: the report itself, then the notes it was written from
 function reportMarkdown(job) {
@@ -75,7 +69,7 @@ function ResearchCard({ chatId, researchId, topic }) {
       <div className="research-head">
         <span className="research-label">research</span>
         <span className="research-status">
-          {lost ? 'no longer available' : !job ? 'loading…' : running ? PHASE_LABEL[job.phase] : ENDED_LABEL[job.status]}
+          {researchLabel({ lost, job })}
           {running && <span className="step-live-dot" aria-hidden="true" />}
         </span>
       </div>

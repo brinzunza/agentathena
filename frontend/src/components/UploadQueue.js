@@ -1,7 +1,6 @@
 import React, { useRef } from 'react';
 import { formatBytes } from '../uploader';
-
-const PROCESSING = new Set(['converting', 'indexing', 'cleanup']);
+import { PROCESSING, INTERRUPTED, isTransferring, isWorking } from '../uploadStatus';
 
 function UploadQueue({ uploadQueue, unfinished = [], onResume, onCancel, onPickFiles, onDiscardUnfinished }) {
   const pickerRef = useRef(null);
@@ -11,9 +10,9 @@ function UploadQueue({ uploadQueue, unfinished = [], onResume, onCancel, onPickF
     <div className="upload-queue">
       {uploadQueue.length > 0 && <div className="queue-header">uploads ({uploadQueue.length})</div>}
       {uploadQueue.map((upload) => {
-        const interrupted = upload.status === 'interrupted';
-        const transferring = upload.status === 'uploading' || interrupted;
-        const active = upload.status !== 'completed' && upload.status !== 'error' && !interrupted;
+        const interrupted = upload.status === INTERRUPTED;
+        const transferring = isTransferring(upload.status);
+        const active = isWorking(upload.status);
         const canCancel = transferring && onCancel;
         return (
         <div key={upload.uploadId} className="upload-progress">

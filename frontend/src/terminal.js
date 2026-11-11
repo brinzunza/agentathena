@@ -2,6 +2,8 @@
 // each question, then every tool the agent called, the code it ran, and what came back. Nothing here
 // runs anything. `buildTerminalLines` turns messages into plain line objects the panel renders.
 
+import { STEP_STATUS } from './steps';
+
 export const TERMINAL_KEY = 'athena-terminal';
 
 const MAX_RESULT_LINES = 14;
@@ -20,14 +22,6 @@ export function toolArgument(step) {
   const value = args.query ?? args.expression ?? args.url ?? args.name ?? args.topic ?? args.fact;
   return value ? clip(JSON.stringify(String(value)), 120) : '';
 }
-
-const STATUS_LINES = {
-  ok: { text: 'done', tone: 'ok', mark: '✓' },
-  error: { text: 'failed', tone: 'err', mark: '✕' },
-  denied: { text: 'not allowed', tone: 'err', mark: '✕' },
-  stopped: { text: 'stopped', tone: 'dim', mark: '■' },
-  skipped: { text: 'redirected', tone: 'dim', mark: '↷' },
-};
 
 function permissionLine(permission) {
   if (permission.state === 'pending') return { text: 'waiting for your approval to run this code…', tone: 'run' };
@@ -62,11 +56,11 @@ function stepLines(step, prefix) {
     if (rows.length > MAX_RESULT_LINES) push({ kind: 'dim', text: `… ${rows.length - MAX_RESULT_LINES} more lines` });
   }
 
+  const shown = STEP_STATUS[step.status];
   if (step.status === 'running') {
-    push({ kind: 'status', tone: 'run', text: 'running…' });
-  } else if (STATUS_LINES[step.status] && !(step.permission && step.permission.state !== 'approved')) {
-    const { text, tone, mark } = STATUS_LINES[step.status];
-    push({ kind: 'status', tone, mark, text });
+    push({ kind: 'status', tone: shown.tone, text: shown.line });
+  } else if (shown && !(step.permission && step.permission.state !== 'approved')) {
+    push({ kind: 'status', tone: shown.tone, mark: shown.mark, text: shown.line });
   }
   return lines;
 }
