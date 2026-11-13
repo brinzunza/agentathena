@@ -1,7 +1,7 @@
 Roundel Sans is a modified version of TeX Gyre Heros (a Nimbus Sans / Helvetica-metric
 clone) from the TeX Gyre project, https://www.gust.org.pl/projects/e-foundry/tex-gyre/heros
 TeX Gyre Heros is distributed under the GUST Font License (GFL), which permits
-modification provided the modified font is renamed. The only change made here is that the
-concave (inner) corners of the outer contours are rounded with a fillet; the family name
+modification provided the modified font is renamed. The changes made here are that the
+curves are squared off a little and the concave (inner) corners are rounded with a fillet; the family name
 was changed to "Roundel Sans". Original copyright and licence entries are kept in the
 font's name table.
