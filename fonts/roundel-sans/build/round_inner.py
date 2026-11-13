@@ -16,7 +16,9 @@ from fontTools.ttLib import TTFont
 MIN_TURN = math.radians(25)   # corners flatter than this are left alone
 MAX_TURN = math.radians(172)  # ...and so are cusps that fold back on themselves
 MAX_SHARE = 0.45              # a fillet may use at most this much of a neighbour
-MAX_CUT = 1.25                # cutback is capped at this many radii
+MAX_CUT = 1.25                # cutback is capped at this many radii...
+MAX_CUT_UNITS = None          # ...or at this many font units (--cap N), if set
+ROUND_COUNTERS = False        # --counters: also round the corners of holes (A, B, 4...)
 
 
 def sub(a, b): return (a[0] - b[0], a[1] - b[1])
@@ -143,6 +145,8 @@ def fillet(a_seg, b_seg):
     """Cubic that bridges the end of a_seg to the start of b_seg."""
     A, B = seg_end(a_seg), seg_start(b_seg)
     u, v = tangent_end(a_seg), tangent_start(b_seg)
+    if not u or not v:
+        return ("L", A, B)
     theta = math.atan2(abs(cross(u, v)), dot(u, v))
     chord = dist(A, B)
     if theta < 1e-3 or chord < 1e-6:
@@ -156,8 +160,8 @@ def round_contour(ops, outer_sign, radius):
     if not segs or len(segs) < 2:
         return ops, 0
     area = signed_area(segs)
-    if area * outer_sign <= 0:      # a counter (hole): leave it alone
-        return ops, 0
+    if area * outer_sign <= 0 and not ROUND_COUNTERS:
+        return ops, 0               # a counter (hole): leave it alone unless --counters
 
     n = len(segs)
     cuts = {}   # vertex index i (between seg i and i+1) -> cut distance
@@ -173,7 +177,10 @@ def round_contour(ops, outer_sign, radius):
             continue
         d = radius * math.tan(theta / 2)
         # Very acute notches (W, M, N, w) would otherwise fill in and look heavy.
-        d = min(d, MAX_CUT * radius)
+        if MAX_CUT_UNITS is None:
+            d = min(d, MAX_CUT * radius)
+        elif theta > math.radians(100):   # fixed cap, only on the sharp notches
+            d = min(d, MAX_CUT_UNITS)
         d = min(d, MAX_SHARE * seg_len(a), MAX_SHARE * seg_len(b))
         if d > 1.0:
             cuts[i] = d
@@ -225,6 +232,15 @@ def rename(font, family, style):
 def main():
     src, dst, radius, family = sys.argv[1], sys.argv[2], float(sys.argv[3]), sys.argv[4]
     keep_name = "--keep-name" in sys.argv
+    if "--counters" in sys.argv:
+        global ROUND_COUNTERS
+        ROUND_COUNTERS = True
+    if "--share" in sys.argv:
+        global MAX_SHARE
+        MAX_SHARE = float(sys.argv[sys.argv.index("--share") + 1])
+    if "--cap" in sys.argv:
+        global MAX_CUT_UNITS
+        MAX_CUT_UNITS = float(sys.argv[sys.argv.index("--cap") + 1])
     font = TTFont(src)
     gs = font.getGlyphSet()
     top = font["CFF "].cff.topDictIndex[0]
