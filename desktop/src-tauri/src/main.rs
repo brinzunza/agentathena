@@ -150,22 +150,59 @@ fn pick_python(stages: &[Box<dyn Fn() -> Vec<PathBuf>>], is_complete: impl Fn(&P
     })
 }
 
+/// Whether a Python can be used for the backend: it has every package already, or it is the project's own
+/// virtual environment and installing what it lacks (`repair`) completes it. Any other Python is never
+/// touched: a system Python is not Athena's to change.
+fn usable(
+    candidate: &PathBuf,
+    venv: &PathBuf,
+    is_complete: &dyn Fn(&PathBuf) -> bool,
+    repair: &dyn Fn(&PathBuf) -> bool,
+) -> bool {
+    is_complete(candidate) || (candidate == venv && venv.exists() && repair(candidate) && is_complete(candidate))
+}
+
+/// Install what the project's virtual environment is missing. The installer's output goes to the
+/// log, since a windowed app has no terminal, and it only ever acts inside a virtual environment
+/// (backend/env_check.py refuses anything else).
+fn repair_venv(python: &PathBuf, check: &Path) -> bool {
+    let log = log_path();
+    let Ok(file) = OpenOptions::new().create(true).append(true).open(&log) else { return false };
+    let Ok(errors) = file.try_clone() else { return false };
+    Command::new(python)
+        .arg(check)
+        .args(["--repair", "--quiet"])
+        .stdin(Stdio::null())
+        .stdout(file)
+        .stderr(errors)
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn log_path() -> PathBuf {
+    std::env::var("HOME")
+        .map(|home| PathBuf::from(home).join("Library").join("Logs").join("Athena-backend.log"))
+        .unwrap_or_else(|_| std::env::temp_dir().join("Athena-backend.log"))
+}
+
 /// A Python that has every package the backend imports (backend/env_check.py is the list). The
-/// project's virtual environment comes first but is skipped when it predates a dependency: one
-/// that can import fastapi and still lacks langchain_anthropic starts fine, then fails on the
-/// first message that needs it.
-fn python(root: &PathBuf) -> Option<PathBuf> {
+/// project's virtual environment comes first. One that predates a dependency (it can import
+/// fastapi and still lack langchain_anthropic, so it starts fine and fails on the first message
+/// that needs it) is brought up to date in place; if that can't be done it is skipped.
+fn python(root: &PathBuf, notify: &dyn Fn(&str)) -> Option<PathBuf> {
     let check = root.join("backend").join("env_check.py");
     let venv = root.join("backend_env").join("bin").join("python");
+    let venv_stage = venv.clone();
     let stages: Vec<Box<dyn Fn() -> Vec<PathBuf>>> = vec![
-        Box::new(move || vec![venv.clone()]),
+        Box::new(move || vec![venv_stage.clone()]),
         Box::new(|| shell_python(false)),
         Box::new(|| framework_pythons_in(Path::new("/Library/Frameworks/Python.framework/Versions"))),
         Box::new(|| vec![PathBuf::from("/opt/homebrew/bin/python3"), PathBuf::from("/usr/local/bin/python3")]),
         Box::new(|| shell_python(true)),
         Box::new(|| vec![PathBuf::from("python3")]),
     ];
-    pick_python(&stages, |python| {
+    let is_complete = |python: &PathBuf| {
         Command::new(python)
             .arg(&check)
             .arg("--quiet")
@@ -174,16 +211,18 @@ fn python(root: &PathBuf) -> Option<PathBuf> {
             .status()
             .map(|status| status.success())
             .unwrap_or(false)
-    })
+    };
+    let repair = |python: &PathBuf| {
+        notify("updating the packages Athena needs. the first start after an update can take a few minutes…");
+        repair_venv(python, &check)
+    };
+    pick_python(&stages, |python| usable(python, &venv, &is_complete, &repair))
 }
 
-fn spawn_backend(root: &PathBuf, port: u16) -> std::io::Result<Child> {
+fn spawn_backend(root: &PathBuf, port: u16, notify: &dyn Fn(&str)) -> std::io::Result<Child> {
     // Output goes to a log file, since a windowed app has no terminal to show it in
-    let log_path = std::env::var("HOME")
-        .map(|home| PathBuf::from(home).join("Library").join("Logs").join("Athena-backend.log"))
-        .unwrap_or_else(|_| std::env::temp_dir().join("Athena-backend.log"));
-    let log = OpenOptions::new().create(true).append(true).open(log_path)?;
-    let python = python(root).ok_or_else(|| {
+    let log = OpenOptions::new().create(true).append(true).open(log_path())?;
+    let python = python(root, notify).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "no Python with the backend's packages was found. run backend/env_check.py with your Python to see what is missing",
@@ -215,11 +254,16 @@ fn main() {
                     ));
                 };
 
+                // A progress line on the "starting" page, without marking it as failed
+                let say = |message: &str| {
+                    let _ = window.eval(&format!("document.getElementById('message').textContent={:?}", message));
+                };
+
                 if !is_healthy(port) {
                     if !root.join("frontend").join("build").join("index.html").exists() {
                         return fail("the web app hasn't been built. run: cd frontend && npm run build");
                     }
-                    match spawn_backend(&root, port) {
+                    match spawn_backend(&root, port, &say) {
                         Ok(child) => *handle.state::<Backend>().0.lock().unwrap() = Some(child),
                         Err(e) => return fail(&format!("couldn't start the backend: {e}")),
                     }
@@ -309,6 +353,54 @@ mod tests {
         assert_eq!(pick_python(&stages, skip_venv), Some(PathBuf::from("python3")));
     }
 
+    fn venv_path() -> PathBuf {
+        // any path that exists: the check for the venv's own existence is part of the rule
+        std::env::current_exe().expect("the test binary has a path")
+    }
+
+    #[test]
+    fn a_complete_python_is_used_without_repairing_anything() {
+        let venv = venv_path();
+        assert!(usable(&venv, &venv, &|_| true, &|_| panic!("nothing needed repairing")));
+    }
+
+    #[test]
+    fn an_incomplete_venv_is_repaired_and_then_used() {
+        use std::cell::Cell;
+        let venv = venv_path();
+        let repaired = Cell::new(false);
+        // complete only once the repair has run
+        let complete = |_: &PathBuf| repaired.get();
+        let repair = |_: &PathBuf| { repaired.set(true); true };
+        assert!(usable(&venv, &venv, &complete, &repair));
+        assert!(repaired.get());
+    }
+
+    #[test]
+    fn a_repair_that_fails_leaves_the_venv_skipped() {
+        let venv = venv_path();
+        assert!(!usable(&venv, &venv, &|_| false, &|_| false));
+    }
+
+    #[test]
+    fn a_repair_that_does_not_complete_it_leaves_the_venv_skipped() {
+        let venv = venv_path();
+        assert!(!usable(&venv, &venv, &|_| false, &|_| true));
+    }
+
+    #[test]
+    fn a_python_that_is_not_the_venv_is_never_repaired() {
+        let venv = venv_path();
+        let other = PathBuf::from("/usr/bin/python3");
+        assert!(!usable(&other, &venv, &|_| false, &|_| panic!("a system python must not be changed")));
+    }
+
+    #[test]
+    fn a_venv_that_is_not_there_is_not_repaired_into_existence() {
+        let venv = PathBuf::from("/no/such/dir/backend_env/bin/python");
+        assert!(!usable(&venv, &venv, &|_| false, &|_| panic!("there is nothing to repair")));
+    }
+
     #[test]
     fn nothing_is_chosen_when_no_python_is_complete() {
         assert_eq!(pick_python(&[stage(&["python3", "python"])], |_| false), None);
@@ -373,7 +465,7 @@ mod tests {
     #[test]
     #[ignore = "depends on the Pythons installed on this machine"]
     fn this_machine_has_a_complete_python_even_with_a_minimal_path() {
-        let chosen = python(&project_root());
+        let chosen = python(&project_root(), &|_| {});
         println!("chosen python: {:?}", chosen);
         assert!(chosen.is_some(), "no complete Python found: run backend/env_check.py with yours");
     }

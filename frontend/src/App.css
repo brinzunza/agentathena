@@ -1692,6 +1692,14 @@ button { -webkit-tap-highlight-color: transparent; }
   color: var(--ink-3);
 }
 
+/* How a call went ahead without being asked: quiet, but there to be read */
+.step-approval {
+  margin-top: 4px;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  opacity: 0.75;
+}
+
 .step-result {
   display: -webkit-box;
   -webkit-line-clamp: 3;

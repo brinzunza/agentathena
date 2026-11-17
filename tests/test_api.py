@@ -21,8 +21,10 @@ def api_chat(client):
     return client.post("/chats", json={"name": "api test"}).json()["id"]
 
 
-def sse(response):
-    return [json.loads(line[6:]) for line in response.text.split("\n\n") if line.startswith("data: ")]
+def sse(response, keep_started=False):
+    events = [json.loads(line[6:]) for line in response.text.split("\n\n") if line.startswith("data: ")]
+    # The first event only tells the browser the server is saving the conversation (see test_turns.py)
+    return events if keep_started else [e for e in events if e["type"] != "started"]
 
 
 # --- config ---

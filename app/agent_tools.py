@@ -29,6 +29,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from langchain_core.tools import StructuredTool
 
+import approvals
 import chat_manager
 import context_manager
 from document_processor import get_retriever, has_documents, list_documents
@@ -47,6 +48,10 @@ PERMISSION_TIMEOUT_SECONDS = 120
 # agent may use (and whether each use needs the user's OK) follows the
 # chat's permission_mode.
 CODE_TOOL = "run_python"
+# Saves a code block from the previous reply to a file. It changes the user's files, so it needs the
+# same approval as running code.
+SAVE_TOOL = "save_code"
+MAX_SAVE_CHARS = 1_000_000
 
 
 def _clip(text: str, limit: int = MAX_TOOL_OUTPUT_CHARS) -> str:
@@ -61,39 +66,51 @@ _pending_permissions: Dict[str, dict] = {}
 _permissions_lock = threading.Lock()
 
 
-def create_permission_request(chat_id: str) -> str:
-    """Register a pending approval and return its id."""
+def create_permission_request(chat_id: str, kind: str = approvals.KIND_CODE, dangerous: bool = False) -> str:
+    """Register a pending approval and return its id. `dangerous` requests can only ever be allowed once."""
     request_id = uuid.uuid4().hex[:12]
     with _permissions_lock:
         _pending_permissions[request_id] = {
             "chat_id": chat_id,
+            "kind": kind,
+            "dangerous": dangerous,
             "event": threading.Event(),
             "approved": False,
         }
     return request_id
 
 
-def resolve_permission_request(chat_id: str, request_id: str, approved: bool) -> bool:
-    """Record the user's decision. False if the request is unknown, expired or another chat's."""
+def resolve_permission_request(chat_id: str, request_id: str, approved: bool, remember: bool = False) -> bool:
+    """
+    Record the user's decision. False if the request is unknown, expired or another chat's. `remember` turns
+    a yes into "yes, for this whole chat", except for a request that was flagged as dangerous.
+    """
     with _permissions_lock:
         pending = _pending_permissions.get(request_id)
         if not pending or pending["chat_id"] != chat_id:
             return False
         pending["approved"] = approved
+        if approved and remember and not pending["dangerous"]:
+            approvals.allow_for_chat(chat_id, pending["kind"])
         pending["event"].set()
     return True
 
 
-def wait_for_permission(request_id: str, timeout: float = PERMISSION_TIMEOUT_SECONDS) -> bool:
-    """Block until the user decides. No answer in time counts as a denial."""
+def wait_for_decision(request_id: str, timeout: float = PERMISSION_TIMEOUT_SECONDS) -> Optional[bool]:
+    """Block until the user decides: True (allowed), False (refused), or None when nobody answered in time."""
     with _permissions_lock:
         pending = _pending_permissions.get(request_id)
     if not pending:
-        return False
-    pending["event"].wait(timeout)
+        return None
+    answered = pending["event"].wait(timeout)
     with _permissions_lock:
         _pending_permissions.pop(request_id, None)
-    return pending["approved"]
+    return pending["approved"] if answered else None
+
+
+def wait_for_permission(request_id: str, timeout: float = PERMISSION_TIMEOUT_SECONDS) -> bool:
+    """Block until the user decides. No answer in time counts as a denial."""
+    return bool(wait_for_decision(request_id, timeout))
 
 
 # --- Calculator ---
@@ -308,6 +325,126 @@ def _limit_child_resources():
             pass
 
 
+# --- Saving a code block to a file ---
+
+_CODE_FENCE = re.compile(r"```[^\n`]*\n(.*?)```", re.DOTALL)
+
+
+class SaveError(Exception):
+    """Why a file can't be saved, worded for the model to act on."""
+
+
+def real_home() -> str:
+    """The user's own home folder. Code run by run_python sees the workspace as `~`, but this process doesn't."""
+    return os.path.expanduser("~")
+
+
+def code_blocks(text: str) -> List[str]:
+    """The contents of the ``` fenced code blocks in a message, in order."""
+    return [match.group(1).rstrip("\n") for match in _CODE_FENCE.finditer(text or "")]
+
+
+def has_unfinished_block(text: str) -> bool:
+    """Whether a message opens a code block it never closes, which is what a reply cut off by the length limit looks like."""
+    return (text or "").count("```") % 2 == 1
+
+
+def _inside(path: str, folder: str) -> bool:
+    try:
+        return os.path.commonpath([os.path.realpath(path), os.path.realpath(folder)]) == os.path.realpath(folder)
+    except ValueError:
+        return False
+
+
+def _nearest_existing(path: str) -> str:
+    while path and not os.path.exists(path):
+        parent = os.path.dirname(path)
+        if parent == path:
+            break
+        path = parent
+    return path
+
+
+def resolve_save_path(path: str, workspace: str, home: str, overwrite: bool = False) -> str:
+    """
+    The absolute path a file would be saved to, or a SaveError saying why not.
+
+    `~` means the user's real home. A relative path means the chat's workspace. Files are only saved
+    inside the home folder (or the workspace), never in hidden folders such as ~/.ssh and never under
+    ~/Library, where a new file can run code later. An existing file is only replaced on request.
+    """
+    raw = (path or "").strip()
+    if not raw:
+        raise SaveError("give the full path of the file to save, for example "
+                        f"{home}/Desktop/project/file.py")
+    if raw.endswith(("/", os.sep)):
+        raise SaveError("that is a folder. give a file name too, for example "
+                        f"{raw}file.py")
+    if raw == "~" or raw.startswith("~/"):
+        raw = home + raw[1:]
+    elif raw.startswith("~"):
+        raise SaveError("only your own home folder can be written with ~. give the full path instead")
+    target = os.path.normpath(raw if os.path.isabs(raw) else os.path.join(workspace, raw))
+
+    in_workspace = _inside(target, workspace)
+    if not in_workspace:
+        if not _inside(target, home):
+            raise SaveError(f"files can only be saved inside the user's home folder ({home}), not at {target}")
+        relative = os.path.relpath(target, home).split(os.sep)
+        if any(part.startswith(".") for part in relative) or relative[0] == "Library":
+            raise SaveError("won't save into a hidden folder or the Library folder. choose a normal folder such as "
+                            f"{home}/Desktop or {home}/Documents")
+    # A symlink can lead out of the home folder, so judge the real location of the folder it would go in
+    parent = _nearest_existing(os.path.dirname(target))
+    if not in_workspace and not _inside(parent, home):
+        raise SaveError(f"that location leads outside the user's home folder ({home})")
+    if os.path.isdir(target):
+        raise SaveError(f"{target} is a folder. give a file name")
+    if "." not in os.path.basename(target).lstrip("."):
+        raise SaveError(f"{target} has no file extension, so it looks like a folder name. path must end with the "
+                        f"file name, for example {target}/backtester.py")
+    if os.path.exists(target) and not overwrite:
+        raise SaveError(f"{target} already exists. ask the user whether to replace it, and call again with "
+                        "overwrite set to true only if they say yes")
+    return target
+
+
+def invalid_arguments(tool, args: dict) -> Optional[str]:
+    """
+    The friendly error for a call whose arguments don't fit the tool, or None if they do. Checked before the
+    user is asked to approve anything, so they are never asked about a call that cannot run.
+    """
+    schema = getattr(tool, "args_schema", None)
+    if not hasattr(schema, "model_validate"):
+        return None
+    try:
+        schema.model_validate(args)
+    except Exception as e:
+        return friendly_tool_error(tool.name, e)
+    return None
+
+
+def friendly_tool_error(name: str, error: Exception) -> str:
+    """A tool failure as a message the model can act on; a bad-arguments error says which argument."""
+    if hasattr(error, "errors") and callable(error.errors):
+        try:
+            problems = []
+            for item in error.errors():
+                field = ".".join(str(part) for part in item.get("loc", ())) or "arguments"
+                problems.append(f"`{field}` is missing" if item.get("type") == "missing"
+                                else f"`{field}` is not valid ({item.get('msg', 'wrong type')})")
+            if problems:
+                advice = ("call it again with every required argument filled in, and leave optional arguments out "
+                          "rather than passing null.")
+                if name == CODE_TOOL and any("`code` is missing" in problem for problem in problems):
+                    advice += (" if you were writing a long program for the user rather than running a quick check, "
+                               "do not use this tool: put the code in your reply instead.")
+                return f"error: {name} was called with the wrong arguments: {'; '.join(problems)}. {advice}"
+        except Exception:
+            pass
+    return f"error: {error}"
+
+
 def run_python_code(code: str, workspace: str) -> str:
     """
     Run code in a separate Python process inside the chat's workspace folder.
@@ -373,8 +510,10 @@ def run_python_code(code: str, workspace: str) -> str:
 class ToolBox:
     """The tools available to one agent run in one chat."""
 
-    def __init__(self, chat_id: str, config: dict, allow_code: Optional[bool] = None):
+    def __init__(self, chat_id: str, config: dict, allow_code: Optional[bool] = None, interactive: bool = True):
         self.chat_id = chat_id
+        # Whether anyone is there to ask. Background research isn't: what needs approval is refused there.
+        self.interactive = interactive
         self.config = config
         self.chroma_db_path, self.files_path = chat_manager.get_chat_paths(chat_id)
         self.retrieved_docs: List = []
@@ -391,8 +530,59 @@ class ToolBox:
     def has_documents(self) -> bool:
         return has_documents(self.chroma_db_path)
 
-    def needs_approval(self, tool_name: str) -> bool:
-        return tool_name == CODE_TOOL and self.config["permission_mode"] == "ask"
+    @staticmethod
+    def kind_of(tool_name: str) -> Optional[str]:
+        """What a tool that needs approval is called when asking: 'code' or 'save'; None for tools that never ask."""
+        return {CODE_TOOL: approvals.KIND_CODE, SAVE_TOOL: approvals.KIND_SAVE}.get(tool_name)
+
+    def dangers(self, tool_name: str, args: dict) -> List[str]:
+        """Why this call deserves a question even where the user said not to be asked (see approvals.py)."""
+        if tool_name == CODE_TOOL:
+            code = args.get("code")
+            return approvals.code_dangers(code) if isinstance(code, str) else []
+        if tool_name == SAVE_TOOL:
+            try:
+                target, _ = self.save_plan(args)
+            except SaveError:
+                return []
+            return ["it replaces a file that is already there"] if os.path.exists(target) else []
+        return []
+
+    def unasked_basis(self, tool_name: str, args: dict) -> Optional[str]:
+        """How a call that needs approval is going ahead without asking: approvals.CHAT or BYPASS, else None."""
+        kind = self.kind_of(tool_name)
+        if not kind or self.config["permission_mode"] == "safe":
+            return None
+        return approvals.how_it_proceeds(self.config["permission_mode"], self.chat_id, kind, self.dangers(tool_name, args))
+
+    def permission_prompt(self, tool_name: str, args: dict) -> Optional[Tuple[str, str]]:
+        """
+        What to show the user before this call runs, as (kind, text), or None when it needs no approval
+        (or can't run at all, in which case the tool itself reports why). `kind` is 'code' or 'save'.
+        """
+        kind = self.kind_of(tool_name)
+        mode = self.config["permission_mode"]
+        if not kind or mode == "safe":
+            return None
+        if tool_name == CODE_TOOL:
+            code = args.get("code")
+            if not isinstance(code, str) or not code.strip():
+                return None      # nothing to run, so nothing to approve: the call fails with a message saying why
+            if approvals.hard_block(code):
+                return None      # refused outright: the tool says so, there is nothing to put to the user
+            text = code
+        else:
+            try:
+                target, content = self.save_plan(args)
+            except SaveError:
+                return None
+            replaces = "\nTHIS REPLACES THE FILE THAT IS ALREADY THERE\n" if os.path.exists(target) else "\n"
+            text = f"save to {target}{replaces}{len(content):,} characters, {content.count(chr(10)) + 1} lines\n\n{content}"
+        dangers = self.dangers(tool_name, args)
+        if approvals.how_it_proceeds(mode, self.chat_id, kind, dangers):
+            return None
+        heading = approvals.why_asked(mode, self.chat_id, kind, dangers)
+        return kind, f"{heading}\n\n{text}" if heading else text
 
     # -- document tools --
 
@@ -501,7 +691,80 @@ class ToolBox:
 
     def run_python(self, code: str) -> str:
         """Run Python code and return what it printed. pandas and numpy are available. Files saved in the working directory persist across runs. Print results you want to see."""
+        blocked = approvals.hard_block(code)
+        if blocked:
+            return approvals.blocked_message(blocked)
         return run_python_code(code, chat_manager.get_workspace_path(self.chat_id))
+
+    # -- saving files for the user --
+
+    def save_plan(self, args: dict) -> Tuple[str, str]:
+        """
+        Where save_code would write and what, from its arguments: (target path, content).
+
+        The content is a code block from the most recent earlier reply that has one: the longest by
+        default, or the numbered one. Raises SaveError with a reason the model can act on.
+        """
+        try:
+            block = int(args.get("block") or 0)
+        except (TypeError, ValueError):
+            raise SaveError("block must be a number: 1 for the first code block, or leave it out for the longest")
+        overwrite = args.get("overwrite") in (True, "true", "True", 1)
+        target = resolve_save_path(str(args.get("path", "")), chat_manager.get_workspace_path(self.chat_id),
+                                   real_home(), overwrite)
+
+        for message in reversed(chat_manager.get_messages(self.chat_id)):
+            if message.get("role") != "assistant":
+                continue
+            blocks = code_blocks(message.get("content") or "")
+            if blocks:
+                break
+            if has_unfinished_block(message.get("content") or ""):
+                raise SaveError("your last reply with code was cut off before its code block ended (it hit the "
+                                "length limit), so the file would be incomplete. tell the user, and offer to write "
+                                "the code again in smaller parts")
+        else:
+            raise SaveError("none of your earlier replies has a code block to save. write the code in a reply "
+                            "first, or use run_python to create the file")
+        if block < 0 or block > len(blocks):
+            raise SaveError(f"your last reply with code has {len(blocks)} code block(s); block {block} doesn't exist")
+        content = blocks[block - 1] if block else max(blocks, key=len)
+        if len(content) > MAX_SAVE_CHARS:
+            raise SaveError(f"that code block is too large to save ({len(content):,} characters)")
+        return target, content + "\n"
+
+    def save_code(self, path: str, block: Optional[int] = None, overwrite: Optional[bool] = None) -> str:
+        """Save a code block from your previous reply to a file."""
+        try:
+            target, content = self.save_plan({"path": path, "block": block, "overwrite": overwrite})
+        except SaveError as e:
+            return f"error: {e}"
+        try:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "w", encoding="utf-8") as f:
+                f.write(content)
+        except OSError as e:
+            return f"error: couldn't write {target}: {e.strerror or e}"
+        return f"saved {len(content):,} characters ({content.count(chr(10))} lines) to {target}"
+
+    def tool_descriptions(self) -> Dict[str, str]:
+        """Descriptions that depend on this machine: the sandbox calls its folder `~`, so say where the real one is."""
+        home = real_home()
+        return {
+            CODE_TOOL: (
+                "Run Python code and return what it printed. pandas and numpy are available. The working directory "
+                "is this chat's workspace, and `~` in the code means that folder, not the user's home. Files saved "
+                "in the working directory persist across runs. To create a file elsewhere for the user, such as on "
+                f"their Desktop, use its full path: their home is {home} and their Desktop is {home}/Desktop "
+                "(make folders with os.makedirs(path, exist_ok=True)). Print results you want to see."),
+            SAVE_TOOL: (
+                "Save a code block from your previous reply to a file on the user's computer, without retyping it. "
+                "Use this when the user asks you to save, put or write code you already showed them into a file or "
+                f"folder. path is the full path of the FILE, ending with its name, for example {home}/Desktop/project/file.py "
+                "(missing folders are created; a folder name alone is not enough). Leave out block and overwrite unless "
+                "you need them: with several code blocks, block is the number of the one to save (1 is the first), "
+                "and an existing file is only replaced if overwrite is true."),
+        }
 
     # -- context tools --
 
@@ -536,8 +799,10 @@ class ToolBox:
 
     def tools(self, include_context_tools: bool = True) -> List[StructuredTool]:
         """The tools to offer the model, per this chat's config."""
+        descriptions = self.tool_descriptions()
+
         def make(func: Callable, name: str) -> StructuredTool:
-            return StructuredTool.from_function(func=func, name=name, description=func.__doc__)
+            return StructuredTool.from_function(func=func, name=name, description=descriptions.get(name, func.__doc__))
 
         offered = [
             make(self.search_documents, "search_documents"),
@@ -550,6 +815,7 @@ class ToolBox:
             offered += [make(self.web_search, "web_search"), make(self.fetch_url, "fetch_url")]
         if self.code_enabled:
             offered.append(make(self.run_python, CODE_TOOL))
+            offered.append(make(self.save_code, SAVE_TOOL))
         if include_context_tools:
             context_tools = [
                 make(self.compact_context, "compact_context"),

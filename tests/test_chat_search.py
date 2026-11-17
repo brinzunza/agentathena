@@ -77,3 +77,120 @@ def test_the_endpoint_returns_results():
     body = response.json()
     assert body["query"] == "find" and [(r["chat_id"], r["index"]) for r in body["results"]] == [(chat, 0)]
     assert TestClient(main.app).get("/chats/search").json()["results"] == []
+
+
+# --- the full-text index behind search (chat_index.py) ---
+
+import chat_index
+import os
+import time
+
+
+def search(query):
+    return [(r["chat_id"], r["index"]) for r in chat_manager.search_chats(query)]
+
+
+class TestTheIndexKeepsUp:
+    def test_a_message_added_after_the_first_search_is_found_by_the_next(self):
+        chat = chat_with("a", ("user", "first thing"))
+        assert search("second") == []
+        chat_manager.update_messages(chat, lambda m: [*m, {"role": "user", "content": "the second thing"}])
+        assert search("second") == [(chat, 1)]
+
+    def test_a_deleted_chat_stops_turning_up(self):
+        chat = chat_with("a", ("user", "needle"))
+        assert search("needle") == [(chat, 0)]
+        chat_manager.delete_chat(chat)
+        assert search("needle") == []
+
+    def test_a_rename_is_found_by_the_new_name_and_not_the_old(self):
+        chat = chat_with("old name", ("user", "hello"))
+        assert search("old") == [(chat, None)]
+        chat_manager.rename_chat(chat, "fresh title")
+        assert search("old") == [] and search("fresh") == [(chat, None)]
+
+    def test_a_message_that_was_removed_is_no_longer_found(self):
+        chat = chat_with("a", ("user", "needle"), ("user", "other"))
+        assert search("needle") == [(chat, 0)]
+        chat_manager.save_messages(chat, [{"role": "user", "content": "other"}])
+        assert search("needle") == []
+
+    def test_a_chat_still_being_copied_is_not_searchable(self):
+        chat = chat_manager.create_chat("half", building=True)["id"]
+        chat_manager.save_messages(chat, [{"role": "user", "content": "secret needle"}])
+        assert search("needle") == []
+
+    def test_the_index_can_be_deleted_and_comes_back_by_itself(self):
+        chat = chat_with("a", ("user", "needle"))
+        assert search("needle") == [(chat, 0)]
+        os.remove(os.path.join(chat_manager.CHATS_ROOT, chat_index.INDEX_NAME))
+        assert search("needle") == [(chat, 0)]
+
+    def test_only_a_chat_that_changed_is_read_again(self):
+        first = chat_with("a", ("user", "one"))
+        chat_with("b", ("user", "two"))
+        connection = chat_index._connect(chat_manager.CHATS_ROOT)
+        ids = [c["id"] for c in chat_manager.list_chats()]
+        assert chat_index.refresh(connection, chat_manager.CHATS_ROOT, ids) == 2
+        assert chat_index.refresh(connection, chat_manager.CHATS_ROOT, ids) == 0
+        time.sleep(0.01)
+        chat_manager.update_messages(first, lambda m: [*m, {"role": "user", "content": "more"}])
+        assert chat_index.refresh(connection, chat_manager.CHATS_ROOT, ids) == 1
+        connection.close()
+
+
+class TestWhatTheIndexMustNotChange:
+    def test_a_part_of_a_word_is_found_as_it_was_by_the_scan(self):
+        chat = chat_with("a", ("user", "Where is the Eiffel Tower?"))
+        assert search("iffel") == [(chat, 0)]
+
+    @pytest.mark.parametrize("query", ["ab", "a", "an"])
+    def test_words_too_short_for_the_index_still_work(self, query):
+        chat = chat_with("x", ("user", "an abacus and a banana"))
+        chat_with("y", ("user", "nothing here"))
+        assert search(query) == [(chat, 0)]
+
+    def test_short_and_long_words_together(self):
+        chat = chat_with("a", ("user", "a red apple"))
+        chat_with("b", ("user", "a red pear"))
+        assert search("a apple") == [(chat, 0)]
+
+    @pytest.mark.parametrize("query", ['"quoted"', "a*b", "NEAR(x y)", "col:thing", "-minus", "AND OR NOT", "(", "'", "x AND"])
+    def test_characters_with_a_meaning_to_the_index_mean_nothing_special(self, query):
+        chat_with("a", ("user", "plain text"))
+        chat_manager.search_chats(query)             # must not raise
+
+    def test_a_quote_inside_the_text_can_be_searched_for(self):
+        chat = chat_with("a", ("user", 'she said "hello there" twice'))
+        assert search('"hello') == [(chat, 0)]
+
+    def test_case_is_ignored_in_the_text_and_in_the_query(self):
+        chat = chat_with("a", ("user", "Quarterly REPORT"))
+        assert search("quarterly report") == [(chat, 0)] == search("QUARTERLY report")
+
+    def test_unicode_text_is_found(self):
+        chat = chat_with("a", ("user", "café au lait, 日本語のテキスト"))
+        assert search("café") == [(chat, 0)] and search("日本語") == [(chat, 0)]
+
+
+class TestWithoutTheIndex:
+    def test_when_sqlite_cannot_provide_it_search_scans_the_files(self, monkeypatch):
+        chat = chat_with("a", ("user", "needle in a haystack"))
+        monkeypatch.setattr(chat_index, "available", lambda: False)
+        assert search("needle") == [(chat, 0)]
+        assert not os.path.exists(os.path.join(chat_manager.CHATS_ROOT, chat_index.INDEX_NAME))
+
+    def test_when_the_index_fails_midway_search_scans_instead(self, monkeypatch):
+        chat = chat_with("a", ("user", "needle"))
+
+        def broken(*args, **kwargs):
+            raise chat_index.IndexUnavailable("disk I/O error")
+
+        monkeypatch.setattr(chat_index, "candidates", broken)
+        assert search("needle") == [(chat, 0)]
+
+    def test_a_corrupt_index_file_is_reported_not_trusted(self):
+        chat = chat_with("a", ("user", "needle"))
+        with open(os.path.join(chat_manager.CHATS_ROOT, chat_index.INDEX_NAME), "wb") as f:
+            f.write(b"this is not a database" * 100)
+        assert search("needle") == [(chat, 0)]

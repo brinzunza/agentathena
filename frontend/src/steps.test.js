@@ -1,4 +1,4 @@
-import { STEP_STATUS, statusLabel, applyStepResult, settleStep } from './steps';
+import { STEP_STATUS, PERMISSION_TEXT, permissionText, statusLabel, applyStepResult, settleStep } from './steps';
 import { buildTerminalLines } from './terminal';
 
 describe('the step status table', () => {
@@ -68,5 +68,50 @@ describe('settleStep', () => {
   test('finished steps are left as they are', () => {
     const done = { id: 1, status: 'ok', permission: { id: 'p', state: 'approved' } };
     expect(settleStep(done)).toEqual(done);
+  });
+});
+
+describe('permissionText', () => {
+  const ask = (kind, state) => permissionText({ kind, state });
+
+  test('running code is asked about, answered and logged in the words it always used', () => {
+    expect(ask('code', 'pending')).toBe('athena wants to run this code on your computer');
+    expect(ask('code', 'approved')).toBe('you allowed this code to run');
+    expect(ask('code', 'denied')).toBe('you did not allow this code to run');
+    expect(permissionText({ kind: 'code', state: 'pending' }, 'waiting')).toBe('waiting for your approval to run this code…');
+  });
+
+  test('saving a file says file, not code, in every state', () => {
+    expect(ask('save', 'pending')).toBe('athena wants to save this file on your computer');
+    expect(ask('save', 'approved')).toBe('you allowed this file to be saved');
+    expect(ask('save', 'denied')).toBe('you did not allow this file to be saved');
+    expect(permissionText({ kind: 'save', state: 'pending' }, 'waiting')).toBe('waiting for your approval to save this file…');
+  });
+
+  test('an expired request reads the same for both kinds', () => {
+    expect(ask('save', 'expired')).toBe('this request expired');
+    expect(ask('code', 'expired')).toBe('this request expired');
+  });
+
+  test('a request saved before kinds existed has none, and reads as code', () => {
+    expect(permissionText({ state: 'approved' })).toBe('you allowed this code to run');
+    expect(permissionText({ kind: 'mystery', state: 'pending' })).toBe('athena wants to run this code on your computer');
+  });
+
+  test('every kind has all four phrases', () => {
+    Object.values(PERMISSION_TEXT).forEach((words) => {
+      expect(Object.keys(words).sort()).toEqual(['approved', 'ask', 'denied', 'waiting']);
+    });
+  });
+});
+
+describe('how a step came to run without asking', () => {
+  test('the result carries it onto the step', () => {
+    const step = applyStepResult({ id: 1, status: 'running' }, { status: 'ok', result: '1', approval: 'chat' });
+    expect(step.approval).toBe('chat');
+  });
+
+  test('a result without one leaves the step without one', () => {
+    expect('approval' in applyStepResult({ id: 1, status: 'running' }, { status: 'ok', result: '1' })).toBe(false);
   });
 });

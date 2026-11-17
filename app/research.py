@@ -20,8 +20,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 import chat_manager
 import context_manager
 from agent import agent_loop, today_string
-from agent_tools import ToolBox
-from llm_prompts import agent_tool_hints, get_research_planner, get_research_writer, research_note_prompt
+from agent_tools import SAVE_TOOL, ToolBox, real_home
+from llm_prompts import get_research_planner, get_research_writer, research_note_prompt, tool_hint_lines
 
 MAX_SUBQUESTIONS = 5
 STEPS_PER_SUBQUESTION = 8
@@ -162,15 +162,16 @@ def _run(chat_id: str, job: dict, cancel: threading.Event, classify_error: Calla
     try:
         config = chat_manager.get_config(chat_id)
         # No one is watching to approve code, so it runs only if the chat is set to bypass.
-        toolbox = ToolBox(chat_id, config, allow_code=config["permission_mode"] == "bypass")
+        toolbox = ToolBox(chat_id, config, allow_code=config["permission_mode"] == "bypass", interactive=False)
 
         job["plan"] = _parse_plan(get_research_planner().invoke({"topic": job["topic"]})) or [job["topic"]]
         job["phase"] = "researching"
         _save(chat_id, job)
 
         names = toolbox.document_names()
-        offered = {tool.name for tool in toolbox.tools(include_context_tools=False)}
-        tool_lines = "\n".join(f"- {hint}" for name, hint in agent_tool_hints.items() if name in offered)
+        # Research writes a report, not files on the user's computer, so it is never offered saving
+        offered = {tool.name for tool in toolbox.tools(include_context_tools=False)} - {SAVE_TOOL}
+        tool_lines = tool_hint_lines(offered, real_home())
         system = f"{research_note_prompt.replace('{today}', today_string())}\n\nTools:\n{tool_lines}"
         if names:
             system += "\n\nDocuments the user has uploaded: " + ", ".join(names)
@@ -184,7 +185,8 @@ def _run(chat_id: str, job: dict, cancel: threading.Event, classify_error: Calla
             note, used = "", []
             for attempt in range(2):
                 messages = [SystemMessage(content=system), HumanMessage(content=prompt)]
-                loop = agent_loop(messages, toolbox, STEPS_PER_SUBQUESTION, include_context_tools=False)
+                loop = agent_loop(messages, toolbox, STEPS_PER_SUBQUESTION, include_context_tools=False,
+                                  withhold_tools=frozenset({SAVE_TOOL}))
                 note, used = "", []
                 try:
                     while True:

@@ -2,7 +2,7 @@
 // each question, then every tool the agent called, the code it ran, and what came back. Nothing here
 // runs anything. `buildTerminalLines` turns messages into plain line objects the panel renders.
 
-import { STEP_STATUS } from './steps';
+import { STEP_STATUS, APPROVAL_NOTE, permissionText } from './steps';
 
 export const TERMINAL_KEY = 'athena-terminal';
 
@@ -19,15 +19,13 @@ const clip = (text, limit = MAX_LINE_CHARS) => {
 export function toolArgument(step) {
   const args = step.args || {};
   if (step.tool === 'run_python') return '';
-  const value = args.query ?? args.expression ?? args.url ?? args.name ?? args.topic ?? args.fact;
+  const value = args.query ?? args.expression ?? args.url ?? args.name ?? args.topic ?? args.fact ?? args.path;
   return value ? clip(JSON.stringify(String(value)), 120) : '';
 }
 
 function permissionLine(permission) {
-  if (permission.state === 'pending') return { text: 'waiting for your approval to run this code…', tone: 'run' };
-  if (permission.state === 'approved') return { text: 'you allowed this code to run', tone: 'dim' };
-  if (permission.state === 'denied') return { text: 'you did not allow this code to run', tone: 'err' };
-  return { text: 'the request expired', tone: 'dim' };
+  const tone = { pending: 'run', denied: 'err' }[permission.state] || 'dim';
+  return { text: permissionText(permission, 'waiting'), tone };
 }
 
 // Lines for one step, as { kind, ... } objects. `key` makes them stable across re-renders.
@@ -55,6 +53,8 @@ function stepLines(step, prefix) {
     rows.slice(0, MAX_RESULT_LINES).forEach((row) => push({ kind: 'out', tone, text: clip(row) }));
     if (rows.length > MAX_RESULT_LINES) push({ kind: 'dim', text: `… ${rows.length - MAX_RESULT_LINES} more lines` });
   }
+
+  if (APPROVAL_NOTE[step.approval]) push({ kind: 'dim', text: APPROVAL_NOTE[step.approval] });
 
   const shown = STEP_STATUS[step.status];
   if (step.status === 'running') {

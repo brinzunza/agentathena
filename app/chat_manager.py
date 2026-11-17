@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 from typing import List, Optional
 
+import chat_index
 from document_processor import list_documents
 
 CHATS_ROOT = "chats"
@@ -145,6 +146,7 @@ def list_chats() -> List[dict]:
         meta["document_count"] = len(list_documents(chroma_db_path, files_path))
         meta.setdefault("parent_id", None)
         meta.setdefault("branch_point", None)
+        meta.setdefault("untitled", False)
         chats.append(meta)
 
     chats.sort(key=lambda c: c["created_at"])
@@ -172,6 +174,9 @@ def search_chats(query: str, limit: int = 50, per_chat: int = 5) -> List[dict]:
     are searched newest first and so are the messages inside each one, so what
     comes back first is what was said most recently.
 
+    Candidates come from the full-text index (chat_index.py); where SQLite can't provide one, every chat's
+    messages are read and scanned instead, with the same results.
+
     Returns:
         [{chat_id, chat_name, index, role, snippet}] where `index` is the
         message's position in the chat, or None when the chat's name matched.
@@ -191,28 +196,51 @@ def search_chats(query: str, limit: int = 50, per_chat: int = 5) -> List[dict]:
             chats.append(meta)
     chats.sort(key=lambda chat: chat["created_at"], reverse=True)
 
+    def matches(text: str) -> bool:
+        lowered = text.lower()
+        return all(term in lowered for term in terms)
+
+    hits = None            # chat id -> [(position, role, content)], when the index could answer
+    try:
+        if chat_index.available():
+            hits = {}
+            for chat_id, position, role, content in chat_index.candidates(
+                    CHATS_ROOT, [chat["id"] for chat in chats], terms, matches):
+                hits.setdefault(chat_id, []).append((position, role, content))
+    except chat_index.IndexUnavailable as error:
+        print(f"WARNING: the chat search index couldn't be used ({error}); scanning instead")
+        hits = None
+
     results = []
     for chat in chats:
         found = 0
-        if all(term in chat["name"].lower() for term in terms):
+        if hits is not None:
+            rows = sorted(hits.get(chat["id"], []), key=lambda row: row[0], reverse=True)
+            name_matched = any(position == -1 for position, _, _ in rows)
+            messages = None
+        else:
+            name_matched = matches(chat["name"])
+            rows = None
+            try:
+                messages = get_messages(chat["id"])
+            except (ValueError, OSError):
+                messages = []
+        if name_matched:
             results.append({"chat_id": chat["id"], "chat_name": chat["name"], "index": None,
                             "role": "chat", "snippet": chat["name"]})
-        try:
-            messages = get_messages(chat["id"])
-        except (ValueError, OSError):
-            continue
-        for index in range(len(messages) - 1, -1, -1):
-            message = messages[index]
-            content = message.get("content")
-            if message.get("role") not in ("user", "assistant") or not isinstance(content, str):
+        if rows is None:
+            rows = [(index, message["role"], message["content"])
+                    for index, message in reversed(list(enumerate(messages)))
+                    if message.get("role") in ("user", "assistant") and isinstance(message.get("content"), str)
+                    and matches(message["content"])]
+        for position, role, content in rows:
+            if position < 0:
                 continue
-            lowered = content.lower()
-            if all(term in lowered for term in terms):
-                results.append({"chat_id": chat["id"], "chat_name": chat["name"], "index": index,
-                                "role": message["role"], "snippet": _snippet(content, terms)})
-                found += 1
-                if found >= per_chat:
-                    break
+            results.append({"chat_id": chat["id"], "chat_name": chat["name"], "index": position,
+                            "role": role, "snippet": _snippet(content, terms)})
+            found += 1
+            if found >= per_chat:
+                break
         if len(results) >= limit:
             break
     return results[:limit]
@@ -266,11 +294,15 @@ def create_chat(name: str, copy_from: Optional[str] = None, in_progress_upload_c
 
     os.makedirs(os.path.join(chat_dir, "files"), exist_ok=True)
 
+    name = (name or "").strip()
     meta = {
         "id": chat_id,
-        "name": name,
+        # No name given: shown as a placeholder until the first exchange, then named after it (titles.py)
+        "name": name or UNTITLED_NAME,
         "created_at": datetime.now().isoformat(),
     }
+    if not name:
+        meta["untitled"] = True
     if parent_id is not None:
         meta["parent_id"] = parent_id
         meta["branch_point"] = branch_point
@@ -283,6 +315,7 @@ def create_chat(name: str, copy_from: Optional[str] = None, in_progress_upload_c
     meta["document_count"] = len(list_documents(chroma_db_path, files_path))
     meta.setdefault("parent_id", None)
     meta.setdefault("branch_point", None)
+    meta.setdefault("untitled", False)
     return meta
 
 
@@ -354,9 +387,26 @@ def rename_chat(chat_id: str, name: str) -> dict:
         raise ValueError("A chat name can't be empty")
     if len(name) > MAX_CHAT_NAME_CHARS:
         raise ValueError(f"A chat name can be at most {MAX_CHAT_NAME_CHARS} characters")
-    return update_meta(chat_id, name=name)
+    return update_meta(chat_id, name=name, untitled=False)
 
 
+def set_generated_title(chat_id: str, title: str) -> Optional[str]:
+    """
+    Name a chat that is still untitled, atomically: if the user has named it since the title was asked for, their
+    name stays. Returns the title when it was applied, else None.
+    """
+    with _meta_lock:
+        if not chat_exists(chat_id):
+            return None
+        meta = get_meta(chat_id)
+        if not meta.get("untitled"):
+            return None
+        meta.update({"name": title[:MAX_CHAT_NAME_CHARS], "untitled": False})
+        _write_json_atomic(_meta_path(chat_id), meta)
+        return meta["name"]
+
+
+UNTITLED_NAME = "new chat"
 MAX_CHAT_NAME_CHARS = 80
 
 

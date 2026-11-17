@@ -30,7 +30,7 @@ def scripted_loop(*outcomes):
     outcomes = list(outcomes)
     attempts = []
 
-    def loop(messages, toolbox, max_steps, include_context_tools=True):
+    def loop(messages, toolbox, max_steps, include_context_tools=True, **options):
         attempts.append(messages[-1].content)
         outcome = outcomes.pop(0)
         if isinstance(outcome, Exception):
@@ -223,7 +223,7 @@ def test_only_one_job_runs_per_chat_and_topics_are_required(chat_id, monkeypatch
 def test_researchers_are_told_todays_date(chat_id, job, monkeypatch):
     seen = []
 
-    def loop(messages, toolbox, max_steps, include_context_tools=True):
+    def loop(messages, toolbox, max_steps, include_context_tools=True, **options):
         seen.append(messages[0].content)
         return "note"
         yield   # pragma: no cover - makes this a generator

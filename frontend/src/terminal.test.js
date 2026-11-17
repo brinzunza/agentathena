@@ -143,3 +143,40 @@ describe('terminalSummary', () => {
     expect(terminalSummary(undefined)).toEqual({ steps: 0, running: false });
   });
 });
+
+describe('saving a file', () => {
+  const saving = (extra = {}) => [{
+    role: 'assistant',
+    steps: [{
+      id: 1, tool: 'save_code', args: { path: '~/Desktop/athenastuff/backtester.py' }, status: 'running',
+      permission: { id: 'p', kind: 'save', code: 'save to /Users/me/Desktop/athenastuff/backtester.py\n12 characters, 1 lines\n\nprint("hi")', state: 'pending' },
+      ...extra,
+    }],
+  }];
+
+  test('the path is shown beside the command', () => {
+    const [command] = buildTerminalLines(saving()).filter((l) => l.kind === 'cmd');
+    expect(command).toMatchObject({ name: 'save_code', arg: '"~/Desktop/athenastuff/backtester.py"' });
+  });
+
+  test('what is about to be saved is shown, and the wait says file, not code', () => {
+    const lines = buildTerminalLines(saving());
+    expect(lines.some((l) => l.kind === 'code' && l.text.startsWith('save to /Users/me/Desktop/athenastuff/backtester.py'))).toBe(true);
+    expect(lines.some((l) => l.text === 'waiting for your approval to save this file…')).toBe(true);
+    expect(lines.some((l) => /run this code/.test(l.text || ''))).toBe(false);
+  });
+
+  test('a refusal says the file was not saved', () => {
+    const lines = buildTerminalLines(saving({ status: 'denied', result: 'no', permission: { id: 'p', kind: 'save', code: 'x', state: 'denied' } }));
+    expect(lines.some((l) => l.text === 'you did not allow this file to be saved' && l.tone === 'err')).toBe(true);
+  });
+});
+
+describe('a call that ran without asking', () => {
+  test('the log says why, so a long run does not look as if the user approved each step', () => {
+    const lines = buildTerminalLines([
+      { role: 'assistant', steps: [{ id: 1, tool: 'run_python', args: { code: 'print(1)' }, status: 'ok', result: '1', approval: 'bypass' }] },
+    ]);
+    expect(lines.some((l) => l.kind === 'dim' && l.text === 'ran without asking: this chat is in bypass mode')).toBe(true);
+  });
+});

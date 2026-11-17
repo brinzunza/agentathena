@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Literal
 import os
@@ -21,12 +22,17 @@ import chat_manager
 import context_manager
 import branches
 import agent_tools
+import approvals
 import research
 import uploads
 import processing_status as pstatus
 import ollama_runner
+import titles
 from agent import run_agent
+from turns import TurnRecorder, settle_interrupted_replies
+from redaction import redact
 import llm_config
+import llm_errors
 
 app = FastAPI(title="AI Assistant API", version="1.0.0")
 
@@ -120,9 +126,11 @@ class ChatInfo(BaseModel):
     # messages the branch started with.
     parent_id: Optional[str] = None
     branch_point: Optional[int] = None
+    # True until a chat started without a name has been given one from its first exchange
+    untitled: bool = False
 
 class CreateChatRequest(BaseModel):
-    name: str
+    name: str = ""          # left empty, the chat is named after its first exchange
     copy_from: Optional[str] = None
 
 class RenameChatRequest(BaseModel):
@@ -186,31 +194,11 @@ def resolve_chat_paths(chat_id: str):
 
 def classify_llm_error(error: Exception):
     """
-    Sort an LLM provider failure into a code the UI can act on, plus a
-    plain-language message. Codes: no_credits, invalid_key,
-    ollama_unreachable, missing_package, error (anything else, with the raw text).
+    Sort an LLM provider failure into a code the UI can act on, plus a plain-language message (see
+    llm_errors.py for the codes and what each one means for retrying).
     """
-    text = str(error)
-    lowered = text.lower()
-    provider = llm_config.get_model_info()["provider"]
-    if isinstance(error, ImportError) or "no module named" in lowered:
-        # Not a provider problem: the Python running the backend lacks a package (typically an old
-        # virtual environment). "No module named 'x'" alone doesn't say which Python or what to do.
-        package = getattr(error, "name", None) or (text.split("'")[1] if text.count("'") >= 2 else "a package")
-        return "missing_package", (f"the Python running this app doesn't have {package} installed ({sys.executable}). "
-                                   f"install it with: {sys.executable} -m pip install -r backend/requirements.txt, "
-                                   "then restart the app.")
-    if ("insufficient_quota" in lowered or "no credits" in lowered or "exceeded your current quota" in lowered
-            or "credit balance is too low" in lowered):
-        return "no_credits", (f"your {provider} account has no credits left. add credits, or switch to another "
-                              "provider (or local Ollama) in settings.")
-    if ("invalid_api_key" in lowered or "incorrect api key" in lowered
-            or "invalid x-api-key" in lowered or "authentication_error" in lowered):
-        return "invalid_key", (f"{provider} rejected the API key. update it in settings, or switch to another "
-                               "provider (or local Ollama).")
-    if "failed to connect to ollama" in lowered or "connection refused" in lowered:
-        return "ollama_unreachable", ("can't reach Ollama. open ai provider and press run ollama, or add an API key.")
-    return "error", text
+    failure = llm_errors.classify(error, llm_config.get_model_info()["provider"], sys.executable)
+    return failure.code, failure.message
 
 def describe_llm_error(error: Exception) -> str:
     """Just the plain-language message from classify_llm_error"""
@@ -439,7 +427,7 @@ async def get_chats():
         raise HTTPException(status_code=500, detail=f"failed to list chats: {str(e)}")
 
 @app.get("/chats/search")
-async def search_chats(q: str = ""):
+def search_chats(q: str = ""):
     """Search chat names and message text (every word of `q` must appear)"""
     query = q.strip()[:200]
     return {"query": query, "results": chat_manager.search_chats(query)}
@@ -506,6 +494,7 @@ async def remove_chat(chat_id: str):
     """Delete a chat and all its documents"""
     try:
         deleted = chat_manager.delete_chat(chat_id)
+        approvals.forget_chat(chat_id)
         if not deleted:
             raise HTTPException(status_code=404, detail=f"chat not found: {chat_id}")
         return StatusResponse(status="success", message=f"deleted chat {chat_id}")
@@ -642,6 +631,8 @@ def read_chat_config(chat_id: str):
 def write_chat_config(chat_id: str, config: ChatConfig):
     """Update a chat's configuration"""
     resolve_chat_paths(chat_id)
+    if config.permission_mode != chat_manager.get_config(chat_id)["permission_mode"]:
+        approvals.forget_chat(chat_id)       # "allow for this chat" belongs to the mode it was given in
     return chat_manager.save_config(chat_id, config.dict())
 
 
@@ -913,6 +904,17 @@ def discard_unfinished_branches():
 
 
 @app.on_event("startup")
+def settle_interrupted_replies_at_startup():
+    """A reply still marked as streaming belongs to a run the last process never finished: settle it"""
+    try:
+        settled = settle_interrupted_replies()
+        if settled:
+            print(f"Settled {settled} reply(ies) that were interrupted")
+    except Exception as e:
+        print(f"WARNING: settling interrupted replies failed: {e}")
+
+
+@app.on_event("startup")
 def settle_interrupted_research():
     """Research that was running when the backend last stopped can't still be running: record that"""
     try:
@@ -946,7 +948,7 @@ async def qa_chat(chat_id: str, message: ChatMessage):
     chroma_db_path, _ = resolve_chat_paths(chat_id)
     try:
         print(f"\n=== QA CHAT REQUEST START ===")
-        print(f"Question: {message.content}")
+        print(f"Question: {redact(message.content)}")
         history = context_manager.build_history(chat_id)
         print(f"Context: {len(history)} entries sent to the model")
 
@@ -1090,34 +1092,55 @@ async def qa_chat_stream(chat_id: str, message: ChatMessage):
     if not use_agent and not has_documents(chroma_db_path):
         raise HTTPException(status_code=400, detail="no database found. upload documents first.")
 
-    print(f"\n=== CHAT REQUEST ({'agent' if use_agent else 'classic'}): {message.content}")
+    print(f"\n=== CHAT REQUEST ({'agent' if use_agent else 'classic'}): {redact(message.content)}")
     history = context_manager.build_history(chat_id)
 
     # A plain (sync) generator: Starlette iterates it in a worker thread, so
     # model calls, tools and waits for the user's approval never block the
     # server's event loop.
+    # The server saves the question and the reply as they happen (turns.py), so closing the page
+    # mid-reply keeps what was written. The first event tells the browser it no longer needs to.
+    recorder = TurnRecorder(chat_id, message.content)
+    recorder.begin()
+
     def event_stream():
+        def out(event):
+            recorder.apply(event)
+            return sse(event)
+
+        # Everything, the first event included, is inside this try, so closing the generator at any point settles
+        # the saved reply. A browser that goes away doesn't close it promptly, though (Starlette just stops
+        # asking, and the generator is only closed whenever it is garbage collected), which is why the response
+        # also settles the reply itself, below.
         try:
-            if use_agent:
-                fell_back = False
-                for event in run_agent(chat_id, message.content, history, config):
-                    if event["type"] == "fallback":
-                        fell_back = True
-                        break
-                    yield sse(event)
-                if not fell_back:
-                    return
-                yield sse({"type": "notice", "message": "this model can't use tools, so Athena answered in classic mode."})
-            for event in classic_events(chat_id, message.content, history, chroma_db_path):
-                yield sse(event)
-        except Exception as e:
-            print(f"ERROR in chat stream: {str(e)}")
-            traceback.print_exc()
-            code, message_text = classify_llm_error(e)
-            yield sse({"type": "error", "message": message_text, "code": code})
+            yield sse({"type": "started"})
+            try:
+                if use_agent:
+                    fell_back = False
+                    for event in run_agent(chat_id, message.content, history, config):
+                        if event["type"] == "fallback":
+                            fell_back = True
+                            break
+                        yield out(event)
+                    if not fell_back:
+                        return
+                    yield out({"type": "notice", "message": "this model can't use tools, so Athena answered in classic mode."})
+                for event in classic_events(chat_id, message.content, history, chroma_db_path):
+                    yield out(event)
+            except Exception as e:
+                print(f"ERROR in chat stream: {redact(str(e))}")
+                traceback.print_exc()
+                code, message_text = classify_llm_error(e)
+                recorder.fail(message_text, code)
+                yield sse({"type": "error", "message": message_text, "code": code})
+        finally:
+            recorder.interrupted()      # a no-op once the turn has ended; otherwise the browser went away
+            if recorder.completed:
+                titles.schedule(chat_id, message.content, recorder.reply["content"])    # a chat with no name yet gets one
 
     return StreamingResponse(
         event_stream(),
+        background=BackgroundTask(recorder.interrupted),     # runs once the response is over, finished or dropped
         media_type="text/plain",
         headers={
             "Cache-Control": "no-cache",
@@ -1162,12 +1185,14 @@ def cancel_research_job(chat_id: str, job_id: str):
 
 class PermissionDecision(BaseModel):
     approve: bool
+    # "chat": yes for every call of this kind in this chat from now on (not honoured for risky code)
+    scope: Literal["once", "chat"] = "once"
 
 @app.post("/chats/{chat_id}/agent/permissions/{request_id}")
 def decide_permission(chat_id: str, request_id: str, decision: PermissionDecision):
     """Approve or deny a pending request from the agent (e.g. to run code)"""
     resolve_chat_paths(chat_id)
-    if not agent_tools.resolve_permission_request(chat_id, request_id, decision.approve):
+    if not agent_tools.resolve_permission_request(chat_id, request_id, decision.approve, remember=decision.scope == "chat"):
         raise HTTPException(status_code=404, detail="that request has expired or was already answered")
     return {"status": "success"}
 

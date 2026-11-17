@@ -17,11 +17,22 @@ fi
 # can import fastapi and still fail on the first message that needs the missing package.
 PYTHON=python3
 if [ -x "$PWD/backend_env/bin/python" ]; then
-    if "$PWD/backend_env/bin/python" backend/env_check.py --quiet 2>/dev/null; then
-        PYTHON="$PWD/backend_env/bin/python"
+    if ! "$PWD/backend_env/bin/python" -c pass 2>/dev/null; then
+        echo "note: backend_env's Python doesn't run (the Python it was made from was moved or removed), so it is being skipped."
+        echo "      rebuild it with: python3 -m venv --clear backend_env && backend_env/bin/pip install -r backend/requirements.txt"
     else
-        echo "note: backend_env is missing packages, so it is being skipped:"
-        "$PWD/backend_env/bin/python" backend/env_check.py 2>&1 | sed 's/^/      /'
+        # An environment that predates a dependency is brought up to date: only what is missing is installed,
+        # and only into this folder's own virtual environment, never into the system Python
+        if ! "$PWD/backend_env/bin/python" backend/env_check.py --quiet 2>/dev/null; then
+            echo "backend_env is missing packages; installing them..."
+            "$PWD/backend_env/bin/python" backend/env_check.py --repair --quiet 2>&1 | sed 's/^/      /'
+        fi
+        if "$PWD/backend_env/bin/python" backend/env_check.py --quiet 2>/dev/null; then
+            PYTHON="$PWD/backend_env/bin/python"
+        else
+            echo "note: backend_env is still missing packages, so it is being skipped:"
+            "$PWD/backend_env/bin/python" backend/env_check.py 2>&1 | sed 's/^/      /'
+        fi
     fi
 fi
 if ! "$PYTHON" backend/env_check.py; then

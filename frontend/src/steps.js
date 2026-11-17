@@ -19,12 +19,13 @@ export const statusLabel = (status) => STEP_STATUS[status]?.label ?? String(stat
 
 // A step whose result has arrived. If its code was still waiting for an answer, the server has
 // stopped waiting (it times out after a while), so the prompt can no longer be answered.
-export function applyStepResult(step, { status, result }) {
+export function applyStepResult(step, { status, result, approval }) {
   const waiting = step.permission?.state === 'pending';
   return {
     ...step,
     status,
     result,
+    ...(approval ? { approval } : {}),
     permission: waiting ? { ...step.permission, state: 'expired' } : step.permission,
   };
 }
@@ -37,4 +38,36 @@ export function settleStep(step) {
     status: step.status === 'running' ? 'stopped' : step.status,
     permission: step.permission?.state === 'pending' ? { ...step.permission, state: 'expired' } : step.permission,
   };
+}
+
+// How a call that needs approval went ahead without being put to the user. The server says which (APPROVAL_NOTES in
+// app/approvals.py; a test keeps the two in step); this is what the step list and the terminal say about it.
+export const APPROVAL_NOTE = {
+  chat: 'ran without asking: you allowed this for the chat',
+  bypass: 'ran without asking: this chat is in bypass mode',
+};
+
+// What an approval request says, by what is being approved: `ask` is the prompt shown to the user,
+// `waiting` the line in the terminal while nothing has been answered.
+export const PERMISSION_TEXT = {
+  code: {
+    ask: 'athena wants to run this code on your computer',
+    waiting: 'waiting for your approval to run this code…',
+    approved: 'you allowed this code to run',
+    denied: 'you did not allow this code to run',
+  },
+  save: {
+    ask: 'athena wants to save this file on your computer',
+    waiting: 'waiting for your approval to save this file…',
+    approved: 'you allowed this file to be saved',
+    denied: 'you did not allow this file to be saved',
+  },
+};
+
+// The words for a request in its current state. `pendingWording` picks which of the two pending
+// phrasings applies ('ask' or 'waiting'). A request of an unknown kind reads as code, the original kind.
+export function permissionText(permission, pendingWording = 'ask') {
+  if (permission.state === 'expired') return 'this request expired';
+  const words = PERMISSION_TEXT[permission.kind] || PERMISSION_TEXT.code;
+  return permission.state === 'pending' ? words[pendingWording] : words[permission.state];
 }

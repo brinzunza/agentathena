@@ -19,7 +19,12 @@ A document-grounded AI agent. Upload PDFs, ask questions about them, and let the
   - manage its own memory, only when you ask it to
 - **Branches.** Fork a chat to follow a side question without touching the main one. A branch starts with a snapshot of the chat's messages, memory and documents (so it keeps working if the original is deleted), nests under it in the sidebar, and can be branched again. Merge it back by picking answers, adding a summary, or replacing the main chat. Documents added in a branch stay in the branch.
 - **Small documents are read whole.** If you say "this project" or "my homework" and what you uploaded is short (about 9,000 characters or less), it is handed to the model directly instead of searched.
-- **Code runs with your permission.** Three modes per chat: *safe* (never runs code), *ask first* (shows the code and waits, the default) and *bypass*.
+- **Code runs with your permission.** Three modes per chat: *safe* (never runs code), *ask first* (shows the code and waits, the default) and *bypass*. Each prompt also offers **allow for this chat**, which stops the questions for that kind of action until you restart or change the mode, and every step that ran without asking says why (in the step list and the terminal). *Bypass* has a floor: code that reaches for private keys, deletes whole folders, changes system settings or starts other programs is still put to you (marked as such, and never remembered), and a few things (wiping your home folder or a disk) are refused whatever anyone answers. These checks read the code's text; they catch accidents and a steered model, not a determined program.
+- **Saving files for you.** Ask it to put code it just showed you into a folder, such as one on your Desktop, and it saves that code block by path, without retyping it. You approve each save (the prompt shows the path and the whole file, and says if it would replace an existing file). It only writes inside your home folder, never into hidden folders or `~/Library`, and never over an existing file unless you say so. Inside the code sandbox `~` is the chat's private workspace, so files meant for you go to full paths.
+- **Cut-off replies are recovered.** The reply limit is 4096 tokens. A reply that hits it is continued automatically (up to three times, with the answer so far given back to the model and any repeated words trimmed), and a tool call that was cut off is asked for again with twice the room. Only if that still isn't enough does the reply say it was cut off, and the save tool refuses an unfinished code block instead of saving half a file.
+- **The server keeps the conversation.** Your question and the reply are saved by the backend as they stream, not by the browser afterwards, so closing the tab or losing the connection mid-reply keeps what was written (marked as stopped), and a second tab or a merge can't be overwritten by a stale copy.
+- **Provider errors are sorted by cause.** A busy or rate-limited service, a timeout or a dropped connection is retried with a short wait before you see anything; a wrong key, no credits, a missing model or a conversation too long for the model is shown with what to do. Setting `LLM_FALLBACK` (see Configuration) lets another provider answer when the chosen one is unusable.
+- **Chats name themselves.** Leave the name blank when creating a chat and it is called "new chat" until its first reply, then given a short title written from that exchange. Search runs on a full-text index (`backend/chats/.search.db`, rebuilt by itself if deleted).
 - **Memory you control.** The context the model sees is stored per chat, editable, and sized by a token budget. Edit it from the context screen or with slash commands.
 - **Background research.** `/research <topic>` plans sub-questions, investigates each with your documents and the web, and writes a report you can download as Markdown. It keeps running if you leave the chat.
 - **Terminal.** A read-only console under the chat (`terminal` in the sidebar, or ctrl + `) that logs what the agent does as it does it: each tool call, the Python it ran, and what came back. It runs nothing itself.
@@ -98,7 +103,7 @@ Create a chat, drop in a PDF, and ask a question. Pick your provider and model u
 ```
 This builds the web app once (and again whenever the interface changes), then serves it and the API together at http://127.0.0.1:8000. It needs no Node process, which is about 600 MB less memory than the development servers. Use `PORT=8001 ./start_app.sh` to pick another port.
 
-**Which Python it uses.** `backend_env/` if it has every package the backend imports, otherwise your system `python3`. A virtual environment from before a dependency was added is skipped, with a note saying what it lacks. `python3 backend/env_check.py` shows what any Python is missing, and `python3 -m pip install -r backend/requirements.txt` fixes it. The desktop app makes the same choice, but an app opened from Finder doesn't see your shell's `PATH` (there, `python3` is a macOS stub with no packages), so it asks your login shell which `python3` it would run, then tries every installed Python.framework version and Homebrew.
+**Which Python it uses.** `backend_env/` if it has every package the backend imports, otherwise your system `python3`. A virtual environment from before a dependency was added is brought up to date: only the missing packages are installed (honouring the versions in `requirements.txt`), and only into `backend_env` itself, never into a system Python. If that can't be done (no internet, or its Python was moved) it is skipped with a note saying what it lacks. `python3 backend/env_check.py` shows what any Python is missing, and `python3 -m pip install -r backend/requirements.txt` fixes it. The desktop app makes the same choice, but an app opened from Finder doesn't see your shell's `PATH` (there, `python3` is a macOS stub with no packages), so it asks your login shell which `python3` it would run, then tries every installed Python.framework version and Homebrew.
 
 ## Desktop app (macOS)
 
@@ -123,12 +128,14 @@ Settings live in `.env` (or are set from the app). All are optional.
 | `OPENAI_MODEL` | OpenAI model | `gpt-4o-mini` |
 | `ANTHROPIC_MODEL` | Claude model | `claude-haiku-5-5` |
 | `OLLAMA_MODEL` | Ollama chat model | `llama3.2:latest` |
+| `LLM_FALLBACK` | `openai`, `anthropic` or `ollama`: answer with this provider when the chosen one is unusable (no credits, bad key, overloaded, unreachable). Off by default, because it sends your messages and the documents' text to a different provider | unset |
 
 Per-chat settings (tools on or off, code permission, step limit, web search, context size) are in the app and saved with each chat.
 
 ## Safety notes
 
 - **Code execution.** `run_python` runs in a separate process inside the chat's workspace folder, with a time limit, a CPU and file-size cap, capped output and no API keys in its environment. It is not a sandbox: the code can read files and use the network like any program you run. Leave the permission on *ask first* unless you trust the model and your documents.
+- **Secrets are masked.** Anything shaped like an API key, token, password or private key in what code prints or a web page returns is replaced with `[redacted ...]` before the model reads it and before it is shown, saved or logged. It matches shapes, so a secret that looks like ordinary text gets through.
 - **Untrusted content.** Web pages and documents can contain text aimed at the model. Tool results are treated as data, web fetching refuses private network addresses, and code needs your approval by default.
 - **No login.** The backend has no authentication and listens only on `127.0.0.1`. Don't expose it to a network.
 - **Your data.** Documents and chats stay in `backend/chats/` on your machine. With a cloud provider, the relevant excerpts and your messages go to that provider; web searches go to a public search engine (switchable off per chat).
@@ -141,6 +148,8 @@ python3 -m pytest                                          # backend (no model o
 cd frontend && CI=true npx react-scripts test --watchAll=false   # frontend
 ```
 
+The exact wording of every prompt and tool description the model sees is committed in `tests/snapshots/prompt_surface.txt`, and a test fails when it changes, so a reworded line shows up in review. After a deliberate change: `UPDATE_PROMPT_SNAPSHOT=1 python3 -m pytest tests/test_prompt_snapshot.py`, and commit the file. The system prompt keeps its fixed rules first and puts everything that varies (date, documents, tools, facts) last, so a local model can reuse the processed start between messages: measured on `llama3.1:8b`, the second message's prompt took 0.9 s instead of 3.0 s.
+
 `tests/live/` has scripts that replay conversations against a real local model, for comparing models or checking a prompt change. They need Ollama running:
 ```bash
 OLLAMA_MODEL=llama3.1:8b python3 tests/live/agent_scenarios.py
@@ -152,6 +161,12 @@ OLLAMA_MODEL=llama3.1:8b python3 tests/live/agent_scenarios.py
 app/                  core logic, shared by the API
   agent.py              the tool-calling loop
   agent_tools.py        tools, web search, URL safety, Python sandbox
+  approvals.py          when code and saves ask, bypass's floor, "allow for this chat"
+  redaction.py          masks secrets in tool output, errors and logs
+  llm_errors.py         sorts provider failures: message, retry waits, fallback
+  turns.py              saves a question and its streamed reply as they happen
+  titles.py             names a chat after its first exchange
+  chat_index.py         full-text search index over chats
   context_manager.py    editable, token-budgeted conversation memory
   research.py           background research jobs
   llm_config.py         OpenAI / Claude / Ollama selection and keys

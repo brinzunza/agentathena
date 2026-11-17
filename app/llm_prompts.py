@@ -3,7 +3,25 @@ from langchain_core.output_parsers import StrOutputParser
 from llm_config import get_llm
 
 
-def _chat_llm():
+# The most a reply may run to. A full program is several thousand characters; at 2000 tokens a reply with one
+# was cut off mid-line, and a tool call carrying one was cut off mid-JSON (which reads as empty arguments).
+# It is only a ceiling: short replies end sooner. Ollama's context (num_ctx below) holds the prompt too.
+CHAT_MAX_OUTPUT_TOKENS = 4096
+
+
+# A retry after a reply ran out of room doubles the output limit (and Ollama's context, which holds the
+# prompt as well as the reply), up to MAX_BOOST times
+MAX_BOOST = 2
+BASE_CONTEXT = 8192
+
+
+def output_limits(boost: int = 0) -> dict:
+    """The output cap and Ollama context for a call, doubled once for each step of `boost`."""
+    boost = max(0, min(boost, MAX_BOOST))
+    return {"num_predict": CHAT_MAX_OUTPUT_TOKENS * 2 ** boost, "num_ctx": BASE_CONTEXT * 2 ** boost}
+
+
+def _chat_llm(boost: int = 0, provider=None):
     """
     Build a fresh LLM instance reflecting whatever provider is currently
     configured. Called per chain build rather than once at import time, so
@@ -14,12 +32,8 @@ def _chat_llm():
     When using Ollama (0.1.33+), KV cache reuse is automatically enabled
     when the prefix of the prompt remains identical between calls.
     """
-    return get_llm(
-        temperature=0,
-        streaming=True,
-        num_predict=2000,  # Only used by Ollama
-        num_ctx=8192  # Only used by Ollama - ensure context window is large enough for caching
-    )
+    # num_ctx is only used by Ollama: the context window must hold the prompt and the reply
+    return get_llm(temperature=0, streaming=True, provider=provider, **output_limits(boost))
 
 
 # QUESTION ANSWERING COMPONENTS
@@ -209,6 +223,22 @@ def get_context_compactor():
     return compact_prompt | _chat_llm() | StrOutputParser()
 
 
+# A name for a chat that was started without one, written from its first exchange
+title_prompt = ChatPromptTemplate.from_messages([
+    ("system", """Write a short title for a chat, from its first question and the start of the answer. Use at most
+    five words, in the language of the question. Name the subject, not the act of asking: "Quarterly sales
+    figures", not "User asks about sales". Output only the title: no quotes, no full stop, no preamble."""),
+    ("user", """Question: {question}
+
+Answer: {answer}""")
+])
+
+
+def get_title_writer():
+    """Fresh title chain, bound to whichever LLM is currently configured."""
+    return title_prompt | _chat_llm() | StrOutputParser()
+
+
 # Context narrowing ("/context keep only info on X") - a yes/no match per
 # piece of context, deliberately NOT a rewrite. The first version asked the
 # model to extract the on-topic facts from each entry, and a small local
@@ -235,6 +265,11 @@ def get_topic_matcher():
     return topic_match_prompt | _chat_llm() | StrOutputParser()
 
 
+def tool_hint_lines(offered, home: str) -> str:
+    """The guidance lines for the tools in `offered`, one per line, with this machine's home folder filled in."""
+    return "\n".join(f"- {hint.replace('{home}', home)}" for name, hint in agent_tool_hints.items() if name in offered)
+
+
 def parse_topic_match(response: str) -> bool:
     """True if the topic matcher answered "yes"."""
     return response.strip().lower().startswith("yes")
@@ -257,7 +292,14 @@ agent_tool_hints = {
     "run_python": "run_python: run Python (pandas and numpy are available) for data analysis, calculations too big "
                   "for the calculator, and testing code. Print what you want to see. Never use it to read, "
                   "summarize, print, repeat or format documents or any text you already have - use the "
-                  "document tools for documents, and write text in your answer.",
+                  "document tools for documents, and write text in your answer. Inside it `~` is this chat's "
+                  "private workspace, not the user's home; the user's home is {home} and their Desktop is "
+                  "{home}/Desktop, so use full paths for files the user wants to find.",
+    "save_code": "save_code: when the user asks you to save, put or write code you already showed them into a file "
+                 "or folder (for example \"put it in a folder called x on my Desktop\"), call this with the full "
+                 "path of the file, ending with a file name you choose, such as {home}/Desktop/x/name.py (never "
+                 "just the folder). It saves the code block from your last reply, so you do not retype it. Never claim you cannot reach the user's folders: this can. If the file "
+                 "exists, ask before replacing it.",
     "compact_context": "compact_context / keep_only_context / forget_context: shrink, narrow or clear this "
                        "conversation's memory. Use them only when the user explicitly asks you to.",
     "remember": "remember: save a fact the user asks you to remember.",
@@ -268,6 +310,12 @@ agent_tool_hints = {
 # generate pipeline. The model decides per message whether it needs tools at
 # all. Tool output comes from documents and the open web, so the prompt
 # states plainly that it's data to use, never instructions to follow.
+#
+# The prompt is ordered by how often each part changes: the rules never do, so they come first and
+# stay identical from one message to the next; then the date (daily), the documents (when files are
+# added), the tools on offer (per message) and what the user has told Athena (grows). A local model
+# keeps the processed start of a prompt and only reads what follows the first difference, so the
+# parts that change must come last.
 agent_system_prompt = """You are Athena, a capable assistant that can use tools. Most messages need NO
 tools: greetings, thanks, small talk, and questions you can answer well from your own knowledge - for these,
 reply directly and do not call any tool. Use a tool only when it is clearly needed.
@@ -283,12 +331,10 @@ a greeting gets a greeting. An earlier answer that ends with a bracketed "[looke
 researched with the tools named there; that note is added by the system, so never write one yourself.
 When the user replies "sure", "yes" or "go ahead" to something you offered, do what you offered.
 
-{tools}
-
-Today's date is {today}. Your training data ends before then, so for anything that may have changed
+Your training data ends before the date given under "Right now" below, so for anything that may have changed
 since - recent events, results, scores, prices, software versions, news - search the web rather than answering
 from memory. Never say an event "hasn't happened yet" or that you can't know about it without checking the
-date above first. If a web search finds nothing, rephrase it and try again before giving up.
+date first. If a web search finds nothing, rephrase it and try again before giving up.
 
 Rules:
 - When a fact in your answer comes from the user's documents, wrap exactly that span in markdown bold, like
@@ -302,7 +348,25 @@ Rules:
   knowledge or make up what a document says; if you cannot read what you need, say so.
 - Cite web sources by name or link in plain text when you rely on them.
 - You may write and explain code when asked.
-- Be direct and accurate. Give the answer without preamble or closing remarks."""
+- Be direct and accurate. Give the answer without preamble or closing remarks.
+
+Right now:
+Today's date is {today}.
+
+{knowledge}
+
+{tools}"""
+
+
+def build_agent_system_prompt(tools_text: str, today: str, knowledge: str, facts=()) -> str:
+    """The agent's system prompt: the unchanging rules first, then what differs from one message to the next."""
+    prompt = agent_system_prompt.replace("{today}", today).replace("{knowledge}", knowledge).replace("{tools}", tools_text)
+    if facts:
+        # Pinned here, not left in the chat history: a document search result sits right next to the
+        # question and a model will trust it over an earlier message that says the opposite.
+        prompt += ("\n\nThe user has told you the following. It is true and overrides anything in the "
+                   "documents or the web:\n" + "\n".join(f"- {fact}" for fact in facts))
+    return prompt
 
 
 # Long-term research - plan, investigate each sub-question with the agent's

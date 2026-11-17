@@ -26,3 +26,16 @@ def test_the_browser_only_adds_the_two_states_only_it_can_see():
 def test_the_agent_loop_only_uses_the_declared_statuses(monkeypatch):
     source = open(agent.__file__, encoding="utf-8").read()
     assert not re.findall(r'status\s*=\s*"(?:ok|error|denied|skipped)"|"status":\s*"(?:ok|error|denied|skipped)"', source)
+
+
+class TestApprovalNotes:
+    """The server names how a call went ahead without asking; the browser has the words for each name."""
+
+    def notes(self):
+        source = open(os.path.join(os.path.dirname(__file__), "..", "frontend", "src", "steps.js"), encoding="utf-8").read()
+        block = source.split("export const APPROVAL_NOTE = {", 1)[1].split("};", 1)[0]
+        return dict(re.findall(r"(\w+):\s*'([^']+)'", block))
+
+    def test_every_way_of_going_ahead_has_a_note_with_the_same_words(self):
+        import approvals
+        assert self.notes() == approvals.APPROVAL_NOTES

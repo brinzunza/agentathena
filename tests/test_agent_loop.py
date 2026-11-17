@@ -198,7 +198,7 @@ def test_bypass_runs_without_asking(chat_id, monkeypatch):
 
 def test_an_unanswered_request_counts_as_denied(chat_id, monkeypatch):
     ran = spy_on_python(monkeypatch)
-    monkeypatch.setattr(agent, "wait_for_permission", lambda request_id: False)
+    monkeypatch.setattr(agent, "wait_for_decision", lambda request_id: False)
     monkeypatch.setattr(agent, "_chat_llm", lambda: ScriptedLLM(call("run_python", CODE), text("done")))
     config = {**chat_manager.get_config(chat_id), "permission_mode": "ask"}
     events = list(agent.run_agent(chat_id, "run some python", [], config))

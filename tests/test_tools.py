@@ -251,11 +251,12 @@ def test_memory_tools_are_offered_only_when_allowed(chat_id, monkeypatch):
     assert not memory & names(box, include_context_tools=False)
 
 
-def test_only_ask_mode_needs_approval_and_only_for_code(chat_id, monkeypatch):
-    assert make_box(chat_id, monkeypatch, permission_mode="ask").needs_approval("run_python")
-    assert not make_box(chat_id, monkeypatch, permission_mode="ask").needs_approval("calculator")
-    assert not make_box(chat_id, monkeypatch, permission_mode="bypass").needs_approval("run_python")
-    assert not make_box(chat_id, monkeypatch, permission_mode="safe").needs_approval("run_python")
+def test_only_ask_mode_asks_about_ordinary_code(chat_id, monkeypatch):
+    code = {"code": "print(1)"}
+    assert make_box(chat_id, monkeypatch, permission_mode="ask").permission_prompt("run_python", code) == ("code", "print(1)")
+    assert make_box(chat_id, monkeypatch, permission_mode="ask").permission_prompt("calculator", {}) is None
+    assert make_box(chat_id, monkeypatch, permission_mode="bypass").permission_prompt("run_python", code) is None
+    assert make_box(chat_id, monkeypatch, permission_mode="safe").permission_prompt("run_python", code) is None
 
 
 def test_read_document_matches_names_loosely(chat_id, monkeypatch):

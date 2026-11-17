@@ -17,7 +17,7 @@ function NewChatModal({ chats, onCreate, onClose }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!name.trim() || creating) return;
+    if (creating) return;
     setCreating(true);
     setError(null);
     try {
@@ -44,7 +44,7 @@ function NewChatModal({ chats, onCreate, onClose }) {
             id="new-chat-name"
             type="text"
             className="field-input"
-            placeholder="e.g. research notes"
+            placeholder="optional: leave blank and athena names it"
             value={name}
             onChange={(e) => setName(e.target.value)}
             autoFocus
@@ -87,7 +87,7 @@ function NewChatModal({ chats, onCreate, onClose }) {
 
           {error && <div className="field-error">{error}</div>}
 
-          <button type="submit" className="primary-action" disabled={!name.trim() || creating}>
+          <button type="submit" className="primary-action" disabled={creating}>
             {creating ? 'creating...' : 'create chat'}
           </button>
         </form>

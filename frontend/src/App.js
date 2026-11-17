@@ -9,6 +9,7 @@ import ChatInput from './components/ChatInput';
 import Terminal from './components/Terminal';
 import { readTerminalOpen, saveTerminalOpen } from './terminal';
 import { applyStepResult, settleStep } from './steps';
+import { needsTitle, watchForTitle } from './titles';
 import { openModal, closeModal, afterSearchShortcut } from './modals';
 import { UPLOADING, INTERRUPTED, CONVERTING, COMPLETED, ERROR, pollFailureOutcome } from './uploadStatus';
 import DocumentLibraryModal from './components/DocumentLibraryModal';
@@ -103,6 +104,10 @@ function App() {
   const abortControllersRef = useRef({});
   const pollFailuresRef = useRef({});     // failed progress checks in a row, by processing job
   const loadedMessagesRef = useRef(new Set());
+
+  // The latest chat list, for code that runs after an await and would otherwise read a stale one
+  const chatsRef = useRef([]);
+  chatsRef.current = chats;
 
   const messages = messagesByChat[activeChatId] || EMPTY_MESSAGES;
   const uploadQueue = uploadQueueByChat[activeChatId] || EMPTY_UPLOAD_QUEUE;
@@ -271,7 +276,7 @@ function App() {
   useEffect(() => { saveTerminalOpen(showTerminal); }, [showTerminal]);
 
   const handleCreateChat = async (name, copyFrom) => {
-    const response = await axios.post(`${API_BASE}/chats`, { name, copy_from: copyFrom || null });
+    const response = await axios.post(`${API_BASE}/chats`, { name: name || '', copy_from: copyFrom || null });
     const newChat = response.data;
     setChats(prev => [...prev, newChat]);
     switchChat(newChat.id);
@@ -684,7 +689,7 @@ function App() {
   };
 
   // The user's answer to "athena wants to run this code"
-  const handlePermission = async (stepId, requestId, approve) => {
+  const handlePermission = async (stepId, requestId, approve, scope = 'once') => {
     const chatId = activeChatId;
     const setState = (state) => updateMessages(chatId, prev => prev.map(message => (
       message.steps ? {
@@ -698,7 +703,7 @@ function App() {
     )));
     setState(approve ? 'approved' : 'denied');
     try {
-      await axios.post(`${API_BASE}/chats/${chatId}/agent/permissions/${requestId}`, { approve });
+      await axios.post(`${API_BASE}/chats/${chatId}/agent/permissions/${requestId}`, { approve, scope });
     } catch (error) {
       setState('expired');
     }
@@ -736,11 +741,7 @@ function App() {
     setInput('');
 
     const userMessage = { role: 'user', content: currentInput };
-    updateMessages(chatId, prev => {
-      const next = [...prev, userMessage];
-      persistMessages(chatId, next);
-      return next;
-    });
+    updateMessages(chatId, prev => [...prev, userMessage]);
     setChatLoading(chatId, true);
 
     const assistantMessage = {
@@ -754,6 +755,10 @@ function App() {
 
     const controller = new AbortController();
     abortControllersRef.current[chatId] = controller;
+    // Once the server says it has started, it saves the question and the reply itself, as they happen.
+    // Until then (a request that failed outright) the browser saves what it shows.
+    let serverSaves = false;
+    const saveUnlessServerDid = (list) => { if (!serverSaves) persistMessages(chatId, list); };
 
     try {
       // The server owns each chat's conversation context (editable via
@@ -793,7 +798,9 @@ function App() {
       }));
 
       const handleEvent = (data) => {
-        if (data.type === 'chunk' && data.content) {
+        if (data.type === 'started') {
+          serverSaves = true;
+        } else if (data.type === 'chunk' && data.content) {
           accumulatedContent += data.content;
           patchReply({ content: accumulatedContent });
         } else if (data.type === 'reset') {
@@ -814,9 +821,22 @@ function App() {
             steps: (message.steps || []).map(step => (step.id === data.id ? applyStepResult(step, data) : step)),
           }));
         } else if (data.type === 'permission_request') {
-          patchStep(data.step, { permission: { id: data.id, code: data.code, state: 'pending' } });
+          patchStep(data.step, { permission: { id: data.id, code: data.code, kind: data.kind || 'code', state: 'pending', can_remember: data.can_remember !== false } });
+        } else if (data.type === 'permission_decided') {
+          // The answer as the server recorded it (this page sets its own state when you click; this covers any other way)
+          patchReply(message => ({
+            ...message,
+            steps: (message.steps || []).map(step => (
+              step.id === data.step && step.permission?.id === data.id
+                ? { ...step, permission: { ...step.permission, state: data.state } }
+                : step
+            )),
+          }));
         } else if (data.type === 'notice') {
-          patchReply({ notice: data.message });
+          patchReply(message => ({
+            ...message,
+            notice: !message.notice ? data.message : message.notice.includes(data.message) ? message.notice : `${message.notice} ${data.message}`,
+          }));
         } else if (data.type === 'sources' && data.content) {
           patchReply({ sources: data.content });
         } else if (data.type === 'complete') {
@@ -832,7 +852,7 @@ function App() {
                 content: accumulatedContent,
               };
             }
-            persistMessages(chatId, newMessages);
+            saveUnlessServerDid(newMessages);
             return newMessages;
           });
         } else if (data.type === 'error') {
@@ -878,7 +898,7 @@ function App() {
           if (lastMessage?.role === 'assistant' && lastMessage.streaming) {
             newMessages[newMessages.length - 1] = settleSteps({ ...lastMessage, streaming: false });
           }
-          persistMessages(chatId, newMessages);
+          saveUnlessServerDid(newMessages);
           return newMessages;
         });
       } else {
@@ -887,7 +907,7 @@ function App() {
           // Drop the empty bubble the reply was streaming into
           const newMessages = prev.slice(0, -1);
           const next = [...newMessages, { role: 'error', content: failure, code }];
-          persistMessages(chatId, next);
+          saveUnlessServerDid(next);
           return next;
         });
       }
@@ -896,6 +916,8 @@ function App() {
     delete abortControllersRef.current[chatId];
     setChatLoading(chatId, false);
     refreshContextUsage(chatId);
+    // A chat started without a name is named by the server once this reply is done
+    if (needsTitle(chatsRef.current, chatId)) watchForTitle(chatId, refreshChats);
   };
 
   const handleSubmit = (e) => {

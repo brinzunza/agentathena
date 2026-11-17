@@ -216,7 +216,31 @@ def set_ollama_model(name: str) -> None:
     _write_env_value("OLLAMA_MODEL", name)
 
 
-def get_llm(temperature: float = 0, streaming: bool = True, **kwargs) -> BaseChatModel:
+_FALLBACK_ENV = "LLM_FALLBACK"
+
+
+def fallback_provider() -> str | None:
+    """
+    The provider to answer with when the chosen one fails, or None. Off unless LLM_FALLBACK names one in
+    .env: switching providers sends the conversation and the documents' text to a different company's
+    servers (or, from a cloud provider, back to this machine), which is the user's decision to make.
+    It must differ from the active provider and be usable: a cloud provider needs its key.
+    """
+    chosen = (os.getenv(_FALLBACK_ENV) or "").strip().lower()
+    if chosen == get_active_provider():
+        return None
+    if chosen == "ollama" or (chosen in CLOUD_PROVIDERS and _key_for(chosen)):
+        return chosen
+    return None
+
+
+def provider_label(provider: str | None = None) -> str:
+    """How a provider is named to the user: 'OpenAI', 'Claude' or 'Ollama'."""
+    provider = provider or get_active_provider()
+    return CLOUD_PROVIDERS[provider]["label"] if provider in CLOUD_PROVIDERS else "Ollama"
+
+
+def get_llm(temperature: float = 0, streaming: bool = True, provider: str | None = None, **kwargs) -> BaseChatModel:
     """
     Get an LLM instance for the active provider (see get_active_provider).
 
@@ -224,6 +248,7 @@ def get_llm(temperature: float = 0, streaming: bool = True, **kwargs) -> BaseCha
         temperature: Model temperature (0-1, default 0). Not sent to Claude,
             whose current models don't accept it.
         streaming: Whether to enable streaming responses (default True)
+        provider: Answer with this provider instead of the active one (used for the fallback)
         **kwargs: Additional model-specific parameters. num_predict is the
             output-token cap (Ollama's name; Claude's max_tokens); num_ctx is
             Ollama-only and ignored elsewhere.
@@ -231,7 +256,7 @@ def get_llm(temperature: float = 0, streaming: bool = True, **kwargs) -> BaseCha
     Returns:
         Initialized LLM instance (ChatOpenAI, ChatAnthropic or ChatOllama)
     """
-    provider = get_active_provider()
+    provider = provider or get_active_provider()
 
     if provider == "openai":
         from langchain_openai import ChatOpenAI

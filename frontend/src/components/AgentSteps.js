@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ChevronRightIcon } from './Icons';
-import { statusLabel } from '../steps';
+import { statusLabel, permissionText, APPROVAL_NOTE } from '../steps';
 
 const TOOL_LABELS = {
   search_documents: 'searched documents',
@@ -11,6 +11,7 @@ const TOOL_LABELS = {
   calculator: 'calculated',
   current_datetime: 'checked the date',
   run_python: 'ran python',
+  save_code: 'saved a file',
   compact_context: 'compacted context',
   keep_only_context: 'narrowed context',
   remember: 'remembered',
@@ -25,7 +26,7 @@ function clip(text, limit) {
 function summarize(step) {
   const args = step.args || {};
   if (step.tool === 'run_python') return '';
-  const value = args.query ?? args.expression ?? args.url ?? args.name ?? args.topic ?? args.fact;
+  const value = args.query ?? args.expression ?? args.url ?? args.name ?? args.topic ?? args.fact ?? args.path;
   return value ? clip(value, 90) : '';
 }
 
@@ -33,16 +34,15 @@ function PermissionPrompt({ permission, onDecide }) {
   const decided = permission.state !== 'pending';
   return (
     <div className="permission-prompt">
-      <div className="permission-title">
-        {permission.state === 'pending' && 'athena wants to run this code on your computer'}
-        {permission.state === 'approved' && 'you allowed this code to run'}
-        {permission.state === 'denied' && 'you did not allow this code to run'}
-        {permission.state === 'expired' && 'this request expired'}
-      </div>
+      <div className="permission-title">{permissionText(permission)}</div>
       <pre className="step-code">{permission.code}</pre>
       {!decided && (
         <div className="permission-actions">
           <button type="button" className="error-action" onClick={() => onDecide(true)}>allow once</button>
+          {/* Risky code is always asked about, so offering to stop asking would promise something false */}
+          {permission.can_remember !== false && (
+            <button type="button" className="error-action" onClick={() => onDecide(true, 'chat')}>allow for this chat</button>
+          )}
           <button type="button" className="error-action" onClick={() => onDecide(false)}>don't allow</button>
         </div>
       )}
@@ -89,10 +89,13 @@ function AgentSteps({ steps, streaming, onDecide }) {
               {step.permission && (
                 <PermissionPrompt
                   permission={step.permission}
-                  onDecide={(approve) => onDecide(step.id, step.permission.id, approve)}
+                  onDecide={(approve, scope) => (scope
+                    ? onDecide(step.id, step.permission.id, approve, scope)
+                    : onDecide(step.id, step.permission.id, approve))}
                 />
               )}
               {step.result && <div className="step-result">{clip(step.result, 400)}</div>}
+              {APPROVAL_NOTE[step.approval] && <div className="step-approval">{APPROVAL_NOTE[step.approval]}</div>}
             </li>
           ))}
         </ol>
