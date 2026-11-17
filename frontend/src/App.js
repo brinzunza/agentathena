@@ -820,6 +820,8 @@ function App() {
             ...message,
             steps: (message.steps || []).map(step => (step.id === data.id ? applyStepResult(step, data) : step)),
           }));
+        } else if (data.type === 'files') {
+          patchReply({ files: data.files });      // every event carries the whole list so far
         } else if (data.type === 'permission_request') {
           patchStep(data.step, { permission: { id: data.id, code: data.code, kind: data.kind || 'code', state: 'pending', can_remember: data.can_remember !== false } });
         } else if (data.type === 'permission_decided') {

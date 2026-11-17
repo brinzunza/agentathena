@@ -123,6 +123,8 @@ class TurnRecorder:
             for step in reply.get("steps", []):
                 if step["id"] == event["step"] and step.get("permission", {}).get("id") == event["id"]:
                     step["permission"] = {**step["permission"], "state": event["state"]}
+        elif kind == "files":
+            reply["files"] = event["files"]         # the whole list so far: each event replaces the last
         elif kind == "notice":
             reply["notice"] = _join_notice(reply.get("notice"), event["message"])
         elif kind == "sources" and event.get("content"):

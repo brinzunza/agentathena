@@ -27,6 +27,7 @@ A document-grounded AI agent. Upload PDFs, ask questions about them, and let the
 - **Chats name themselves.** Leave the name blank when creating a chat and it is called "new chat" until its first reply, then given a short title written from that exchange. Search runs on a full-text index (`backend/chats/.search.db`, rebuilt by itself if deleted).
 - **Memory you control.** The context the model sees is stored per chat, editable, and sized by a token budget. Edit it from the context screen or with slash commands.
 - **Background research.** `/research <topic>` plans sub-questions, investigates each with your documents and the web, and writes a report you can download as Markdown. It keeps running if you leave the chat.
+- **Code stays out of the way.** Code in a reply isn't shown as it is written: a small sign says *Building…* (cells laying down one by one, with a live line count) and turns to *Built* when the block is done. Afterwards a short snippet reads as normal and a long block folds behind *show code*; the code a step ran folds the same way (an approval prompt always shows it in full, since you're deciding on it). At the end of the reply, every file it created, edited or deleted is listed with its line counts, and a click shows the diff. The list covers files saved with `save_code`, files code writes into the chat's workspace, and files code writes to a place in your home folder that it spells out as text (such as `/Users/you/Desktop/app.py`); a path the code builds while it runs can't be seen, so it may be missing from the list. Nothing is listed that didn't change. Diffs are saved with the reply, and long ones (or files that aren't text) are listed without one.
 - **Terminal.** A read-only console under the chat (`terminal` in the sidebar, or ctrl + `) that logs what the agent does as it does it: each tool call, the Python it ran, and what came back. It runs nothing itself.
 - **Chat niceties.** Markdown rendering (tables, code, lists), copy, regenerate and edit-last-message, stop, and chat history that survives a reload.
 - **Light and dark themes.** A grainy charcoal page (or pale grey in light) with one paper card for the chat, plain type with a single serif word, and scribbles around the numbers. Blue marks what's interactive and green marks text that comes from your documents. It follows your system until you press the sun/moon button, and then remembers your choice. Motion is switched off if your system asks for reduced motion.
@@ -165,6 +166,7 @@ app/                  core logic, shared by the API
   redaction.py          masks secrets in tool output, errors and logs
   llm_errors.py         sorts provider failures: message, retry waits, fallback
   turns.py              saves a question and its streamed reply as they happen
+  file_changes.py       which files a reply created or changed, and their diffs
   titles.py             names a chat after its first exchange
   chat_index.py         full-text search index over chats
   context_manager.py    editable, token-budgeted conversation memory

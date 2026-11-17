@@ -32,6 +32,7 @@ from langchain_core.tools import StructuredTool
 import approvals
 import chat_manager
 import context_manager
+import file_changes
 from document_processor import get_retriever, has_documents, list_documents
 
 MAX_TOOL_OUTPUT_CHARS = 6000
@@ -316,7 +317,7 @@ def _limit_child_resources():
     """Runs in the child before exec: cap CPU time and the size of any file it writes."""
     os.setsid()
     for limit, value in (
-        (resource.RLIMIT_CPU, PYTHON_TIMEOUT_SECONDS),
+        (resource.RLIMIT_CPU, PYTHON_TIMEOUT_SECONDS + 2),      # a backstop: the wall-clock timeout should always be first
         (resource.RLIMIT_FSIZE, 20 * 1024 * 1024),
     ):
         try:
@@ -522,6 +523,8 @@ class ToolBox:
         # be one a small model can wander into on its own.
         self.context_tools_allowed: set = set()
         self._seen_chunks = set()
+        # The files this reply creates or changes, listed for the user at the end (file_changes.py)
+        self.changes = file_changes.FileChanges()
         # Code runs only if the chat's permission mode allows it; callers
         # with no one to ask (background research) can force it off.
         self.code_enabled = config["permission_mode"] != "safe" if allow_code is None else allow_code
@@ -694,7 +697,18 @@ class ToolBox:
         blocked = approvals.hard_block(code)
         if blocked:
             return approvals.blocked_message(blocked)
-        return run_python_code(code, chat_manager.get_workspace_path(self.chat_id))
+        workspace = chat_manager.get_workspace_path(self.chat_id)
+        home = real_home()
+        named = file_changes.paths_written_in(code, home)       # places outside the workspace the code spells out
+
+        def look():
+            return {**file_changes.snapshot_workspace(workspace), **file_changes.snapshot_paths(named)}
+
+        before = look()
+        try:
+            return run_python_code(code, workspace)
+        finally:
+            self.changes.record_workspace(workspace, home, before, look())
 
     # -- saving files for the user --
 
@@ -739,12 +753,15 @@ class ToolBox:
             target, content = self.save_plan({"path": path, "block": block, "overwrite": overwrite})
         except SaveError as e:
             return f"error: {e}"
+        before = file_changes.read_text(target)       # None when there is no such file yet
         try:
             os.makedirs(os.path.dirname(target), exist_ok=True)
             with open(target, "w", encoding="utf-8") as f:
                 f.write(content)
         except OSError as e:
             return f"error: couldn't write {target}: {e.strerror or e}"
+        self.changes.record(target, file_changes.label_for(target, chat_manager.get_workspace_path(self.chat_id), real_home()),
+                            before, content)
         return f"saved {len(content):,} characters ({content.count(chr(10))} lines) to {target}"
 
     def tool_descriptions(self) -> Dict[str, str]:

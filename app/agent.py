@@ -467,6 +467,9 @@ def agent_loop(messages: list, toolbox: ToolBox, max_steps: int, include_context
             if basis and status != STEP_DENIED:
                 event["approval"] = basis       # it ran without being asked: say why, so the log shows who decided
             yield event
+            files = toolbox.changes.take()      # set when this step created or changed a file
+            if files is not None:
+                yield {"type": "files", "files": files}
             messages.append(ToolMessage(content=result, tool_call_id=call["id"]))
 
 
@@ -557,7 +560,7 @@ def lookup_note(tool: str, args: dict) -> str:
 def run_agent(chat_id: str, question: str, history: List[Tuple[str, str]], config: dict) -> Iterator[dict]:
     """
     Answer one user message with the agent, yielding SSE-ready event dicts:
-    chunk, reset, step, step_result, permission_request, sources, complete,
+    chunk, reset, step, step_result, files, permission_request, sources, complete,
     or a single `fallback` event when the model can't call tools at all.
     Provider errors propagate to the caller.
     """

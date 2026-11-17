@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { ChevronRightIcon, FileTextIcon } from './Icons';
 import AgentSteps from './AgentSteps';
 import ResearchCard from './ResearchCard';
-import Markdown from './Markdown';
+import ReplyBody from './ReplyBody';
+import FileChanges from './FileChanges';
 
 // Error codes (from the backend) that the API key settings can fix
 const SETTINGS_ERROR_CODES = new Set(['no_credits', 'invalid_key', 'ollama_unreachable']);
@@ -81,11 +82,16 @@ function Message({
       )}
       {message.notice && <div className="message-notice">{message.notice}</div>}
       {hasContent && <div className={`message-content ${message.streaming ? 'streaming' : ''}`}>
-        {message.role === 'assistant' ? <Markdown>{message.content}</Markdown> : message.content}
+        {message.role === 'assistant'
+          ? <ReplyBody content={message.content} streaming={!!message.streaming} />
+          : message.content}
         {message.response_time != null && (
           <div className="response-time">{message.response_time.toFixed(2)}s</div>
         )}
       </div>}
+      {message.role === 'assistant' && !message.streaming && message.files?.length > 0 && (
+        <FileChanges files={message.files} />
+      )}
       {finished && (
         <MessageActions>
           <CopyButton text={message.content} />

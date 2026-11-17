@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ChevronRightIcon } from './Icons';
 import { statusLabel, permissionText, APPROVAL_NOTE } from '../steps';
+import { withoutCode } from '../codeBlocks';
 
 const TOOL_LABELS = {
   search_documents: 'searched documents',
@@ -50,6 +51,20 @@ function PermissionPrompt({ permission, onDecide }) {
   );
 }
 
+// The code a step ran is kept out of the way: one line saying how much, and a click to read it
+function StepCode({ code }) {
+  const [open, setOpen] = useState(false);
+  const lines = String(code).split('\n').length;
+  return (
+    <div className="step-code-fold">
+      <button type="button" className="step-code-toggle" onClick={() => setOpen(!open)} aria-expanded={open}>
+        {open ? 'hide code' : 'show code'} · python · {lines} {lines === 1 ? 'line' : 'lines'}
+      </button>
+      {open && <pre className="step-code">{code}</pre>}
+    </div>
+  );
+}
+
 function AgentSteps({ steps, streaming, onDecide }) {
   const [openChoice, setOpenChoice] = useState(null);
   const awaitingApproval = steps.some((s) => s.permission?.state === 'pending');
@@ -77,14 +92,14 @@ function AgentSteps({ steps, streaming, onDecide }) {
         <ol className="step-list">
           {steps.map((step) => (
             <li key={step.id} className={`step step-${step.status}`}>
-              {step.thought && <div className="step-thought">{clip(step.thought, 240)}</div>}
+              {step.thought && <div className="step-thought">{clip(withoutCode(step.thought), 240)}</div>}
               <div className="step-head">
                 <span className="step-tool">{TOOL_LABELS[step.tool] || step.tool}</span>
                 <span className="step-arg">{summarize(step)}</span>
                 <span className="step-status">{statusLabel(step.status)}</span>
               </div>
               {step.tool === 'run_python' && !step.permission && step.args?.code && (
-                <pre className="step-code">{step.args.code}</pre>
+                <StepCode code={step.args.code} />
               )}
               {step.permission && (
                 <PermissionPrompt
