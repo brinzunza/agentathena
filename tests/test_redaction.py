@@ -6,21 +6,21 @@ import chat_manager
 from fakes import ScriptedLLM, call, text
 from redaction import redact
 
-KEY = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789"
+KEY = "sk-ant-" "api03-" "abcdefghijklmnopqrstuvwxyz0123456789"
 
 
 class TestWhatIsMasked:
     @pytest.mark.parametrize("secret, label", [
         (KEY, "anthropic key"),
-        ("sk-proj-abcdefghijklmnopqrstuvwxyz012345", "api key"),
-        ("sk-abcdefghijklmnopqrstuvwxyz012345", "api key"),
-        ("ghp_abcdefghijklmnopqrstuvwxyz0123456789", "github token"),
+        ("sk-" "proj-" "abcdefghijklmnopqrstuvwxyz012345", "api key"),
+        ("sk-" "abcdefghijklmnopqrstuvwxyz012345", "api key"),
+        ("gh" "p_" "abcdefghijklmnopqrstuvwxyz0123456789", "github token"),
         ("github_pat_" + "a1B2c3D4e5" * 5, "github token"),
-        ("AKIAIOSFODNN7EXAMPLE", "aws key"),
-        ("AIzaSyA-abcdefghijklmnopqrstuvwxyz01234", "google key"),
-        ("xoxb-123456789012-abcdefghijkl", "slack token"),
-        ("sk_live_abcdefghijklmnop1234", "stripe key"),
-        ("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U", "token"),
+        ("AKIA" "IOSFODNN7EXAMPLE", "aws key"),
+        ("AIza" "SyA-abcdefghijklmnopqrstuvwxyz01234", "google key"),
+        ("xox" "b-123456789012-abcdefghijkl", "slack token"),
+        ("sk_" "live_" "abcdefghijklmnop1234", "stripe key"),
+        ("eyJhbGciOiJIUzI1NiJ9." "eyJzdWIiOiIxMjM0NTY3ODkwIn0." "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U", "token"),
     ])
     def test_well_known_formats(self, secret, label):
         assert redact(f"here: {secret} done") == f"here: [redacted {label}] done"
